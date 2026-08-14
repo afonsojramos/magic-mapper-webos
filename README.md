@@ -15,6 +15,13 @@ or release burden to the upstream repository.
   or Alexa.
 - Opens an app selected from the apps installed on the TV.
 - Makes one remote button behave like another.
+- Covers every action supported by the pinned Magic Mapper runtime: OLED light,
+  energy saving, eye comfort, Dynamic Tone Mapping, screen off, IR, webhooks,
+  TCP commands, HDMI-CEC, and PicCap.
+- Groups actions into remote-friendly TV screens with strict input validation
+  and one-level-at-a-time Back navigation.
+- Can disable the Magic Remote pointer globally from Settings, with a warning
+  and a reversible restart flow.
 - Shows whether the mapper actually holds the remote input device.
 - Restores individual buttons and supports clean removal from the TV UI.
 - Imports supported mappings from a manual Magic Mapper installation on first

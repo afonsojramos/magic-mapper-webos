@@ -1,7 +1,7 @@
 {
   "name": "magic-mapper-webos",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "A TV-native Homebrew wrapper for Magic Mapper",
   "scripts": {
     "check": "python3 -m unittest discover -s tests -v && python3 -m py_compile runtime/managed_mapper.py runtime/magic_mapper_runtime.py runtime/mapperctl.py vendor/magic_mapper.py",

@@ -16,12 +16,19 @@ if VENDOR_DIR not in sys.path:
     sys.path.insert(0, VENDOR_DIR)
 
 from magic_mapper import BUTTONS
-from magic_mapper_runtime import atomic_write_json, config_digest, validate_config
+from magic_mapper_runtime import (
+    atomic_write_json,
+    config_digest,
+    load_action_catalog,
+    validate_config,
+    validate_settings,
+)
 
 
 APP_ID = "com.github.afonsojramos.magicmapper"
 STATE_DIR = "/var/lib/webosbrew/magic-mapper"
 CONFIG_PATH = os.path.join(STATE_DIR, "config.json")
+SETTINGS_PATH = os.path.join(STATE_DIR, "settings.json")
 PID_PATH = os.path.join(STATE_DIR, "magic-mapper.pid")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 LOG_PATH = os.path.join(STATE_DIR, "magic-mapper.log")
@@ -52,26 +59,18 @@ def load_config():
         return json.load(config_file)
 
 
+def load_settings():
+    if not os.path.isfile(SETTINGS_PATH):
+        return {"block_mouse": False}
+    with open(SETTINGS_PATH) as settings_file:
+        settings = json.load(settings_file)
+    validate_settings(settings)
+    return dict({"block_mouse": False}, **settings)
+
+
 def valid_functions():
     # Public functions supported by the original mapper configuration format.
-    return {
-        "cycle_energy_mode": True,
-        "toggle_eye_comfort": True,
-        "screen_off": True,
-        "set_energy_mode": True,
-        "increase_oled_light": True,
-        "reduce_oled_light": True,
-        "set_oled_backlight": True,
-        "launch_app": True,
-        "send_ir_command": True,
-        "curl": True,
-        "press_button": True,
-        "send_cec_button": True,
-        "set_dynamic_tone_mapping": True,
-        "disabled": True,
-        "send_tcp_command": True,
-        "toggle_piccap": True,
-    }
+    return dict((action["id"], True) for action in load_action_catalog()["actions"])
 
 
 def read_pid():
@@ -138,6 +137,7 @@ def start_mapper():
         atomic_write_json(CONFIG_PATH, {})
     config = load_config()
     validate_config(config, BUTTONS, valid_functions())
+    settings = load_settings()
     log_file = open(LOG_PATH, "ab", 0)
     command = [
         python_executable(), "-u", os.path.join(APP_DIR, "runtime", "managed_mapper.py"),
@@ -145,6 +145,8 @@ def start_mapper():
         "--state-dir", STATE_DIR,
         "--app-dir", APP_DIR,
     ]
+    if settings.get("block_mouse"):
+        command.append("--block-mouse")
     process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
     with open(PID_PATH, "w") as pid_file:
         pid_file.write(str(process.pid))
@@ -196,6 +198,8 @@ def install():
             migrated = True
         else:
             atomic_write_json(CONFIG_PATH, {})
+    if not os.path.isfile(SETTINGS_PATH):
+        atomic_write_json(SETTINGS_PATH, {"block_mouse": False})
     install_hook()
     stop_legacy_mapper()
     try:
@@ -223,6 +227,7 @@ def status():
         data["configDigest"] = config_digest(config)
     else:
         data["config"] = {}
+    data["settings"] = load_settings()
     return data
 
 
@@ -244,6 +249,26 @@ def configure(encoded):
     pid, unused_started = start_mapper()
     del unused_started
     return config, pid
+
+
+def decode_settings(encoded):
+    try:
+        raw = base64.b64decode(encoded).decode("utf-8")
+        settings = json.loads(raw)
+        return validate_settings(settings)
+    except Exception as error:
+        raise ValueError("Invalid settings: %s" % error)
+
+
+def configure_settings(encoded):
+    ensure_state()
+    settings = decode_settings(encoded)
+    normalized = {"block_mouse": bool(settings.get("block_mouse", False))}
+    atomic_write_json(SETTINGS_PATH, normalized)
+    stop_mapper()
+    pid, unused_started = start_mapper()
+    del unused_started
+    return normalized, pid
 
 
 def discover(request_id):
@@ -294,6 +319,16 @@ def list_apps():
     return sorted(apps, key=lambda app: (not app.get("removable", False), app["title"].lower()))
 
 
+def capabilities():
+    available = False
+    try:
+        response = luna_json("luna://org.webosbrew.piccap.service/status", {})
+        available = response.get("returnValue", True) is not False
+    except Exception:
+        pass
+    return {"piccap": available}
+
+
 def tail_log():
     try:
         with open(LOG_PATH, "rb") as log_file:
@@ -334,8 +369,8 @@ def schedule_uninstall():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=(
-        "install", "status", "start", "stop", "restart", "configure",
-        "discover", "discovery-result", "apps", "logs", "remove", "uninstall",
+        "install", "status", "start", "stop", "restart", "configure", "configure-settings",
+        "discover", "discovery-result", "apps", "capabilities", "logs", "remove", "uninstall",
     ))
     parser.add_argument("value", nargs="?")
     args = parser.parse_args()
@@ -357,6 +392,9 @@ def main():
         elif args.command == "configure":
             config, pid = configure(args.value or "")
             result(config=config, pid=pid, status=status())
+        elif args.command == "configure-settings":
+            settings, pid = configure_settings(args.value or "")
+            result(settings=settings, pid=pid, status=status())
         elif args.command == "discover":
             discover(args.value)
             result(requestId=args.value)
@@ -364,6 +402,8 @@ def main():
             print(json.dumps(discovery_result(args.value), sort_keys=True))
         elif args.command == "apps":
             result(apps=list_apps())
+        elif args.command == "capabilities":
+            result(capabilities=capabilities())
         elif args.command == "logs":
             result(log=tail_log())
         elif args.command == "remove":

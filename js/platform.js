@@ -46,6 +46,26 @@
       });
   }
 
+  function loadCatalog() {
+    return new Promise(function (resolve, reject) {
+      var request = new XMLHttpRequest();
+      request.open("GET", "runtime/action_catalog.json", true);
+      request.onload = function () {
+        if (request.status && (request.status < 200 || request.status >= 300)) {
+          reject(new Error("Could not load the action catalogue"));
+          return;
+        }
+        try { resolve(JSON.parse(request.responseText)); } catch (error) { reject(error); }
+      };
+      request.onerror = function () { reject(new Error("Could not load the action catalogue")); };
+      request.send();
+    });
+  }
+
+  function encode(value) {
+    return window.btoa(unescape(encodeURIComponent(JSON.stringify(value))));
+  }
+
   function mockPlatform() {
     var stored = window.localStorage.getItem("magic-mapper-demo-config");
     var config = stored ? JSON.parse(stored) : {
@@ -55,14 +75,16 @@
     };
     var active = true;
     var installed = true;
+    var settings = { block_mouse: false };
     var discoveries = ["rakuten", "disney", "netflix"];
 
     return {
       isMock: true,
-      status: function () { return Promise.resolve({ status: { active: active, installed: installed, config: config, configDigest: "demo12345678" } }); },
+      status: function () { return Promise.resolve({ status: { active: active, installed: installed, config: config, settings: settings, configDigest: "demo12345678" } }); },
       install: function () { installed = true; active = true; return this.status(); },
       start: function () { active = true; return this.status(); },
       stop: function () { active = false; return this.status(); },
+      catalog: loadCatalog,
       configure: function (nextConfig) {
         config = nextConfig;
         window.localStorage.setItem("magic-mapper-demo-config", JSON.stringify(config));
@@ -82,6 +104,11 @@
         { id: "cdp-30", title: "Plex" }, { id: "com.webos.app.browser", title: "Web Browser" },
         { id: "youtube.leanback.v4", title: "YouTube" }, { id: "com.webos.app.hdmi1", title: "HDMI 1" }
       ] }); },
+      capabilities: function () { return Promise.resolve({ capabilities: { piccap: true } }); },
+      configureSettings: function (nextSettings) {
+        settings = nextSettings;
+        return this.status();
+      },
       logs: function () { return Promise.resolve({ log: "Starting Magic Mapper\nEXCLUSIVE_MODE is enabled\nFirst loop complete, Magic Mapper is running" }); },
       uninstall: function () { installed = false; active = false; config = {}; return Promise.resolve({ ok: true }); }
     };
@@ -98,13 +125,15 @@
     install: function () { return run("install"); },
     start: function () { return run("start"); },
     stop: function () { return run("stop"); },
+    catalog: loadCatalog,
     configure: function (config) {
-      var encoded = window.btoa(unescape(encodeURIComponent(JSON.stringify(config))));
-      return run("configure", encoded);
+      return run("configure", encode(config));
     },
+    configureSettings: function (settings) { return run("configure-settings", encode(settings)); },
     discover: function (id) { return run("discover", id); },
     discoveryResult: function (id) { return run("discovery-result", id); },
     apps: function () { return run("apps"); },
+    capabilities: function () { return run("capabilities"); },
     logs: function () { return run("logs"); },
     uninstall: function () { return run("uninstall"); }
   };

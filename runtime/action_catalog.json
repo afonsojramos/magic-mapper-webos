@@ -1,0 +1,238 @@
+{
+  "categories": [
+    {
+      "id": "common",
+      "title": "Everyday actions",
+      "summary": "Block a shortcut, open an app, or copy another remote button."
+    },
+    {
+      "id": "picture",
+      "title": "Picture & screen",
+      "summary": "Adjust OLED light, energy saving, eye comfort, and HDR behavior."
+    },
+    {
+      "id": "automation",
+      "title": "Devices & automation",
+      "summary": "Control connected gear or call another service on your network."
+    },
+    {
+      "id": "experimental",
+      "title": "Experimental",
+      "summary": "Low-level controls that may depend on your TV or connected device."
+    }
+  ],
+  "actions": [
+    {
+      "id": "disabled",
+      "category": "common",
+      "title": "Disable it",
+      "summary": "Block the button's built-in action completely.",
+      "editor": "instant",
+      "inputs": []
+    },
+    {
+      "id": "launch_app",
+      "category": "common",
+      "title": "Open an app",
+      "summary": "Choose an app installed on this TV.",
+      "editor": "apps",
+      "inputs": [
+        { "name": "app_id", "type": "string", "required": true },
+        { "name": "app_title", "type": "string" },
+        { "name": "params", "label": "Launch parameters (JSON)", "type": "object", "multiline": true, "placeholder": "{\"target\": \"https://example.com\"}" }
+      ]
+    },
+    {
+      "id": "press_button",
+      "category": "common",
+      "title": "Act like another button",
+      "summary": "Press a second remote button to copy it.",
+      "editor": "button",
+      "inputs": [
+        { "name": "button", "type": "button", "required": true }
+      ]
+    },
+    {
+      "id": "reduce_oled_light",
+      "category": "picture",
+      "title": "Decrease OLED light",
+      "summary": "Lower OLED pixel brightness by a chosen amount.",
+      "editor": "fields",
+      "inputs": [
+        { "name": "increment", "label": "Amount", "type": "integer", "default": 10, "min": 1, "max": 100, "step": 1 },
+        { "name": "disable_energy_savings", "label": "Turn off energy saving first", "type": "boolean", "default": true },
+        { "name": "notifications", "label": "Show confirmation", "type": "boolean", "default": true }
+      ]
+    },
+    {
+      "id": "increase_oled_light",
+      "category": "picture",
+      "title": "Increase OLED light",
+      "summary": "Raise OLED pixel brightness by a chosen amount.",
+      "editor": "fields",
+      "inputs": [
+        { "name": "increment", "label": "Amount", "type": "integer", "default": 10, "min": 1, "max": 100, "step": 1 },
+        { "name": "disable_energy_savings", "label": "Turn off energy saving first", "type": "boolean", "default": true },
+        { "name": "notifications", "label": "Show confirmation", "type": "boolean", "default": true }
+      ]
+    },
+    {
+      "id": "set_oled_backlight",
+      "category": "picture",
+      "title": "Set OLED light",
+      "summary": "Set OLED pixel brightness to an exact value.",
+      "editor": "fields",
+      "inputs": [
+        { "name": "backlight", "label": "OLED light", "type": "integer", "required": true, "default": 50, "min": 0, "max": 100, "step": 1 },
+        { "name": "notifications", "label": "Show confirmation", "type": "boolean", "default": true }
+      ]
+    },
+    {
+      "id": "cycle_energy_mode",
+      "category": "picture",
+      "title": "Cycle energy saving",
+      "summary": "Move through maximum, medium, minimum, and off.",
+      "editor": "fields",
+      "inputs": [
+        { "name": "reverse_order", "label": "Reverse the order", "type": "boolean", "default": false },
+        { "name": "notifications", "label": "Show confirmation", "type": "boolean", "default": true }
+      ]
+    },
+    {
+      "id": "set_energy_mode",
+      "category": "picture",
+      "title": "Set energy saving",
+      "summary": "Switch directly to one energy-saving mode.",
+      "editor": "fields",
+      "inputs": [
+        {
+          "name": "mode",
+          "label": "Mode",
+          "type": "choice",
+          "required": true,
+          "default": "off",
+          "options": [
+            { "value": "off", "label": "Off" },
+            { "value": "min", "label": "Minimum" },
+            { "value": "med", "label": "Medium" },
+            { "value": "max", "label": "Maximum" },
+            { "value": "auto", "label": "Auto" },
+            { "value": "screen_off", "label": "Screen off" }
+          ]
+        },
+        { "name": "notifications", "label": "Show confirmation", "type": "boolean", "default": true }
+      ]
+    },
+    {
+      "id": "screen_off",
+      "category": "picture",
+      "title": "Turn the screen off",
+      "summary": "Keep the TV awake with its panel off until another button is pressed.",
+      "editor": "instant",
+      "inputs": []
+    },
+    {
+      "id": "toggle_eye_comfort",
+      "category": "picture",
+      "title": "Toggle eye comfort",
+      "summary": "Turn Reduce Blue Light on or off.",
+      "editor": "fields",
+      "inputs": [
+        { "name": "notifications", "label": "Show confirmation", "type": "boolean", "default": true }
+      ]
+    },
+    {
+      "id": "set_dynamic_tone_mapping",
+      "category": "picture",
+      "title": "Set Dynamic Tone Mapping",
+      "summary": "Choose off, on, or HGiG for HDR content.",
+      "editor": "fields",
+      "inputs": [
+        {
+          "name": "value",
+          "label": "Mode",
+          "type": "choice",
+          "required": true,
+          "default": "on",
+          "options": [
+            { "value": "off", "label": "Off" },
+            { "value": "on", "label": "On" },
+            { "value": "HGIG", "label": "HGiG" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "send_ir_command",
+      "category": "automation",
+      "title": "Send an IR command",
+      "summary": "Control a device configured through Device Connector.",
+      "editor": "fields",
+      "inputs": [
+        { "name": "tv_input", "label": "Connected input", "type": "string", "required": true, "default": "OPTICAL", "placeholder": "OPTICAL" },
+        { "name": "device_type", "label": "Device type", "type": "string", "required": true, "default": "audio", "placeholder": "audio" },
+        { "name": "keycode", "label": "IR key code", "type": "string", "required": true, "default": "IR_KEY_POWER", "placeholder": "IR_KEY_POWER" }
+      ]
+    },
+    {
+      "id": "curl",
+      "category": "automation",
+      "title": "Call a URL",
+      "summary": "Trigger a webhook, such as a Home Assistant automation.",
+      "editor": "fields",
+      "warning": "Headers and payloads are stored as plain text on the TV. Do not put long-lived secrets here.",
+      "inputs": [
+        { "name": "url", "label": "URL", "type": "url", "required": true, "placeholder": "http://homeassistant.local:8123/api/webhook/..." },
+        {
+          "name": "method",
+          "label": "Method",
+          "type": "choice",
+          "default": "GET",
+          "options": [
+            { "value": "GET", "label": "GET" },
+            { "value": "POST", "label": "POST" },
+            { "value": "PUT", "label": "PUT" },
+            { "value": "PATCH", "label": "PATCH" },
+            { "value": "DELETE", "label": "DELETE" }
+          ]
+        },
+        { "name": "headers", "label": "Headers", "type": "stringList", "multiline": true, "placeholder": "Authorization: Bearer ..." },
+        { "name": "data", "label": "Payload", "type": "string", "multiline": true, "placeholder": "{\"scene\": \"movie\"}" }
+      ]
+    },
+    {
+      "id": "send_tcp_command",
+      "category": "automation",
+      "title": "Send a TCP command",
+      "summary": "Send one line of text to a device on your network.",
+      "editor": "fields",
+      "warning": "TCP commands are sent without encryption. Use this only on a network you trust.",
+      "inputs": [
+        { "name": "ip", "label": "Host or IP address", "type": "string", "required": true, "placeholder": "192.168.1.50" },
+        { "name": "port", "label": "Port", "type": "integer", "required": true, "min": 1, "max": 65535, "placeholder": "23" },
+        { "name": "command", "label": "Command", "type": "string", "required": true, "allowEmpty": true, "placeholder": "POWER ON" },
+        { "name": "timeout", "label": "Timeout (seconds)", "type": "number", "default": 5, "min": 0.1, "max": 30, "step": 0.5 }
+      ]
+    },
+    {
+      "id": "toggle_piccap",
+      "category": "automation",
+      "title": "Toggle PicCap",
+      "summary": "Start or stop the PicCap capture service.",
+      "editor": "instant",
+      "requires": "piccap",
+      "inputs": []
+    },
+    {
+      "id": "send_cec_button",
+      "category": "experimental",
+      "title": "Send an HDMI-CEC key",
+      "summary": "Send a low-level key code to the active HDMI device.",
+      "editor": "fields",
+      "warning": "CEC support varies by TV and connected device. Start with the known Home code.",
+      "inputs": [
+        { "name": "code", "label": "CEC key code", "type": "integer", "required": true, "default": 18882561, "min": 0, "max": 2147483647 }
+      ]
+    }
+  ]
+}

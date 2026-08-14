@@ -12,9 +12,11 @@ sys.path.insert(0, os.path.join(ROOT_DIR, "runtime"))
 from magic_mapper_runtime import (
     DiscoveryController,
     config_digest,
+    load_action_catalog,
     needs_clean_back_replay,
     output_device_name,
     validate_config,
+    validate_settings,
 )
 
 
@@ -23,6 +25,67 @@ FUNCTIONS = {"launch_app": True, "press_button": True}
 
 
 class ConfigValidationTests(unittest.TestCase):
+    def test_catalog_covers_every_upstream_action(self):
+        catalog = load_action_catalog()
+        self.assertEqual(
+            {action["id"] for action in catalog["actions"]},
+            {
+                "cycle_energy_mode", "toggle_eye_comfort", "screen_off", "set_energy_mode",
+                "increase_oled_light", "reduce_oled_light", "set_oled_backlight", "launch_app",
+                "send_ir_command", "curl", "press_button", "send_cec_button",
+                "set_dynamic_tone_mapping", "disabled", "send_tcp_command", "toggle_piccap",
+            },
+        )
+
+    def test_accepts_representative_inputs_for_every_action(self):
+        catalog = load_action_catalog()
+        functions = dict((action["id"], True) for action in catalog["actions"])
+        actions = [
+            {"function": "cycle_energy_mode", "inputs": {"reverse_order": True, "notifications": True}},
+            {"function": "toggle_eye_comfort", "inputs": {"notifications": False}},
+            {"function": "screen_off", "inputs": {}},
+            {"function": "set_energy_mode", "inputs": {"mode": "med", "notifications": True}},
+            {"function": "increase_oled_light", "inputs": {"increment": 5, "disable_energy_savings": True}},
+            {"function": "reduce_oled_light", "inputs": {"increment": 15, "notifications": False}},
+            {"function": "set_oled_backlight", "inputs": {"backlight": 65}},
+            {"function": "launch_app", "inputs": {"app_id": "cdp-30", "app_title": "Plex", "params": {"target": "library"}}},
+            {"function": "send_ir_command", "inputs": {"tv_input": "OPTICAL", "keycode": "IR_KEY_POWER", "device_type": "audio"}},
+            {"function": "curl", "inputs": {"url": "https://example.com/hook", "method": "POST", "headers": ["X-Test: yes"], "data": "{}"}},
+            {"function": "press_button", "inputs": {"button": "ok"}},
+            {"function": "send_cec_button", "inputs": {"code": 18882561}},
+            {"function": "set_dynamic_tone_mapping", "inputs": {"value": "HGIG"}},
+            {"function": "disabled", "inputs": {}},
+            {"function": "send_tcp_command", "inputs": {"ip": "192.168.1.50", "port": 23, "command": "POWER ON", "timeout": 2.5}},
+            {"function": "toggle_piccap", "inputs": {}},
+        ]
+        config = {"netflix": actions}
+        self.assertIs(validate_config(config, BUTTONS, functions), config)
+
+    def test_rejects_invalid_action_inputs(self):
+        catalog = load_action_catalog()
+        functions = dict((action["id"], True) for action in catalog["actions"])
+        invalid_actions = [
+            {"function": "set_oled_backlight", "inputs": {"backlight": 101}},
+            {"function": "set_energy_mode", "inputs": {"mode": "turbo"}},
+            {"function": "curl", "inputs": {"url": "ftp://example.com/file"}},
+            {"function": "send_tcp_command", "inputs": {"ip": "tv", "port": 70000, "command": "on"}},
+            {"function": "send_cec_button", "inputs": {"code": 1.5}},
+            {"function": "launch_app", "inputs": {"app_id": "cdp-30", "params": []}},
+            {"function": "screen_off", "inputs": {"surprise": True}},
+        ]
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                with self.assertRaises(ValueError):
+                    validate_config({"netflix": action}, BUTTONS, functions)
+
+    def test_validates_global_settings(self):
+        settings = {"block_mouse": True}
+        self.assertIs(validate_settings(settings), settings)
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            validate_settings({"block_mouse": "yes"})
+        with self.assertRaisesRegex(ValueError, "Unknown setting"):
+            validate_settings({"block_mouse": False, "other": True})
+
     def test_webos_25_uses_passthrough_device_that_preserves_back(self):
         self.assertEqual(
             output_device_name(10, "LGE M-RCU - Builtin [2]"),

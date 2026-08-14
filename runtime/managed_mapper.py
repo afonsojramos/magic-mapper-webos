@@ -254,11 +254,13 @@ def main():
     parser.add_argument("--config", default=CONFIG_PATH)
     parser.add_argument("--state-dir", default=STATE_DIR)
     parser.add_argument("--app-dir", default=APP_DIR)
+    parser.add_argument("--block-mouse", action="store_true")
     parser.add_argument("--no-start-delay", action="store_true")
     args = parser.parse_args()
     CONFIG_PATH = os.path.abspath(args.config)
     STATE_DIR = os.path.abspath(args.state_dir)
     APP_DIR = os.path.abspath(args.app_dir)
+    upstream.BLOCK_MOUSE = args.block_mouse
 
     print("Starting managed Magic Mapper")
     if not args.no_start_delay:
@@ -266,6 +268,7 @@ def main():
     button_map = load_config()
     upstream.WEBOS_MAJOR_VERSION = upstream.get_webos_version()
     print("WEBOS_MAJOR_VERSION: %s" % upstream.WEBOS_MAJOR_VERSION)
+    print("BLOCK_MOUSE: %s" % upstream.BLOCK_MOUSE)
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     input_loop(button_map)
