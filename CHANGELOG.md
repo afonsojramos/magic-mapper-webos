@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/afonsojramos/magic-mapper-webos/compare/v1.1.0...v1.1.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* read the remote input device unbuffered so no event is delayed ([a79b53f](https://github.com/afonsojramos/magic-mapper-webos/commit/a79b53fc1cc3e4ef01a0705c772eac8229e53a3f))
+
 ## [1.1.0](https://github.com/afonsojramos/magic-mapper-webos/compare/v1.0.0...v1.1.0) (2026-08-26)
 
 
