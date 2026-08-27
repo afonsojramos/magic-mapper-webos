@@ -84,6 +84,14 @@ track it and offer updates. The TV still needs root access and Homebrew Channel 
 In Homebrew Channel, open **Add repository** and enter:
 
 ```
+https://mm.afonsojramos.me
+```
+
+That address redirects to the index attached to the newest release, so it keeps working as new
+versions ship. The release asset it resolves to also works directly if a client cannot follow
+redirects:
+
+```
 https://github.com/afonsojramos/magic-mapper-webos/releases/latest/download/repo.json
 ```
 
