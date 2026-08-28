@@ -19,11 +19,11 @@
     "sync-upstream": "node scripts/sync-upstream.mjs"
   },
   "dependencies": {
-    "@solidjs/web": "2.0.0-rc.0",
-    "solid-js": "2.0.0-rc.0"
+    "@solidjs/web": "2.0.0-rc.3",
+    "solid-js": "2.0.0-rc.3"
   },
   "devDependencies": {
-    "@solidjs/vite-plugin": "3.0.0-next.28",
+    "@solidjs/vite-plugin": "3.0.0-next.34",
     "@tailwindcss/vite": "4.3.3",
     "@webos-tools/cli": "^3.2.1",
     "oxfmt": "0.63.0",
