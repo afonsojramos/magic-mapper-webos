@@ -1,6 +1,7 @@
 {
   "repository": "andrewfraley/magic_mapper",
-  "commit": "f7aa46d7d965b964671a4c413639d97dc66fcd46",
+  "version": "1.1.0",
+  "commit": "25736dccbc87e7101259c065ec8a2bb3b5983674",
   "path": "magic_mapper.py",
-  "sha256": "a02e48cdcbc674414085f59377c21671e8f569b77088069268b84d850a7b1504"
+  "sha256": "36839ef0468c094ea64e0c3fc8811c701fb8f7961ff7f6b905a41c39c58232f0"
 }

@@ -7,7 +7,7 @@ redirect a button without editing JSON over SSH.
 
 This is an independent Homebrew wrapper around
 [Magic Mapper](https://github.com/andrewfraley/magic_mapper), not an official Magic Mapper project.
-The upstream mapper stays unmodified and pinned.
+The upstream mapper stays unmodified and pinned to version 1.1.0.
 
 ## What it can do
 
@@ -20,8 +20,9 @@ The upstream mapper stays unmodified and pinned.
 - Disable the Magic Remote pointer globally through a guarded, reversible setting.
 - Restore individual buttons or remove Magic Mapper cleanly from the TV.
 
-Every action exposed by the pinned upstream runtime is available through remote-friendly screens
-with strict input validation and one-level-at-a-time Back navigation.
+The supported actions are available through remote-friendly screens with strict input validation and
+one-level-at-a-time Back navigation. Upstream 1.1.0's Bluetooth toggle and optional IR input are not
+exposed by this wrapper yet.
 
 ![Magic Mapper action catalogue](assets/screenshots/action-catalog.png)
 
@@ -29,7 +30,7 @@ with strict input validation and one-level-at-a-time Back navigation.
 
 - A rooted LG webOS TV.
 - Homebrew Channel running as root.
-- Python 3 on the TV.
+- Python 3.7 or newer on the TV.
 
 The current hardware target is an LG C3 running webOS 25 (internal webOS 10.3.1). Wider hardware
 compatibility has not yet been claimed.
@@ -147,6 +148,10 @@ asset URLs so the compiled application runs directly from its webOS package.
 The managed runtime in [`runtime/managed_mapper.py`](runtime/managed_mapper.py) owns the input loop
 and loads the upstream actions and button definitions. It adds one-shot discovery, authoritative
 status, graceful input release, and app lifecycle handling.
+
+The managed loop uses upstream 1.1.0's input-device names and automatic output-device selection,
+including the webOS 25 Back fix. Unmapped input, including Back, passes through unchanged, with its
+original press, repeat, release, and synchronization events.
 
 The upstream source pin and checksum live in [`vendor/upstream.json`](vendor/upstream.json).
 Packaging verifies that [`vendor/magic_mapper.py`](vendor/magic_mapper.py) still matches that

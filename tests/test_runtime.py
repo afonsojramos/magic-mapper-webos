@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import json
 import os
@@ -7,16 +8,16 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT_DIR, "runtime"))
 
+import managed_mapper
 from magic_mapper_runtime import (
     DiscoveryController,
     config_digest,
     load_action_catalog,
-    needs_clean_back_replay,
-    output_device_name,
     validate_config,
     validate_settings,
 )
@@ -28,21 +29,16 @@ FUNCTIONS = {"launch_app": True, "press_button": True}
 
 
 class ConfigValidationTests(unittest.TestCase):
-    def test_catalog_covers_every_upstream_action(self):
+    def test_catalog_covers_supported_upstream_actions(self):
         catalog = load_action_catalog()
         self.assertEqual(
             {action["id"] for action in catalog["actions"]},
-            {
-                "cycle_energy_mode", "toggle_eye_comfort", "screen_off", "set_energy_mode",
-                "increase_oled_light", "reduce_oled_light", "set_oled_backlight", "launch_app",
-                "send_ir_command", "curl", "press_button", "send_cec_button",
-                "set_dynamic_tone_mapping", "disabled", "send_tcp_command", "toggle_piccap",
-            },
+            set(managed_mapper.upstream.CONFIG_FUNCTIONS) - {"toggle_bluetooth"},
         )
 
     def test_accepts_representative_inputs_for_every_action(self):
         catalog = load_action_catalog()
-        functions = dict((action["id"], True) for action in catalog["actions"])
+        functions = {action["id"]: True for action in catalog["actions"]}
         actions = [
             {"function": "cycle_energy_mode", "inputs": {"reverse_order": True, "notifications": True}},
             {"function": "toggle_eye_comfort", "inputs": {"notifications": False}},
@@ -66,7 +62,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_rejects_invalid_action_inputs(self):
         catalog = load_action_catalog()
-        functions = dict((action["id"], True) for action in catalog["actions"])
+        functions = {action["id"]: True for action in catalog["actions"]}
         invalid_actions = [
             {"function": "set_oled_backlight", "inputs": {"backlight": 101}},
             {"function": "set_energy_mode", "inputs": {"mode": "turbo"}},
@@ -77,9 +73,8 @@ class ConfigValidationTests(unittest.TestCase):
             {"function": "screen_off", "inputs": {"surprise": True}},
         ]
         for action in invalid_actions:
-            with self.subTest(action=action):
-                with self.assertRaises(ValueError):
-                    validate_config({"netflix": action}, BUTTONS, functions)
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                validate_config({"netflix": action}, BUTTONS, functions)
 
     def test_validates_global_settings(self):
         settings = {"block_mouse": True}
@@ -88,24 +83,6 @@ class ConfigValidationTests(unittest.TestCase):
             validate_settings({"block_mouse": "yes"})
         with self.assertRaisesRegex(ValueError, "Unknown setting"):
             validate_settings({"block_mouse": False, "other": True})
-
-    def test_webos_25_uses_passthrough_device_that_preserves_back(self):
-        self.assertEqual(
-            output_device_name(10, "LGE M-RCU - Builtin [2]"),
-            "LGE M-RCU - Builtin [1]",
-        )
-
-    def test_older_webos_keeps_upstream_passthrough_device(self):
-        self.assertEqual(
-            output_device_name(9, "LGE M-RCU - Builtin [2]"),
-            "LGE M-RCU - Builtin [2]",
-        )
-
-    def test_only_webos_25_back_key_events_are_normalized(self):
-        self.assertTrue(needs_clean_back_replay(10, 1, 412))
-        self.assertFalse(needs_clean_back_replay(9, 1, 412))
-        self.assertFalse(needs_clean_back_replay(10, 0, 0))
-        self.assertFalse(needs_clean_back_replay(10, 1, 1037))
 
     def test_webos_delivers_back_button_events_to_the_app(self):
         app_info = json.loads((Path(__file__).parents[1] / "appinfo.json").read_text())
@@ -139,6 +116,146 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_digest_is_stable_across_key_order(self):
         self.assertEqual(config_digest({"a": 1, "b": 2}), config_digest({"b": 2, "a": 1}))
+
+
+class UpstreamCompatibilityTests(unittest.TestCase):
+    def test_loads_upstream_1_1_0(self):
+        self.assertEqual(managed_mapper.upstream.VERSION, "1.1.0")
+        self.assertEqual(managed_mapper.upstream.VERSION, managed_mapper.UPSTREAM_METADATA["version"])
+
+    def test_catalog_actions_are_callable_upstream_functions(self):
+        for action in load_action_catalog()["actions"]:
+            with self.subTest(action=action["id"]):
+                self.assertIn(action["id"], managed_mapper.upstream.CONFIG_FUNCTIONS)
+                self.assertTrue(callable(getattr(managed_mapper.upstream, action["id"])))
+
+    def test_webos_25_uses_upstream_passthrough_device_that_preserves_back(self):
+        self.assert_output_device(10, "/dev/input/event4")
+
+    def test_older_webos_keeps_upstream_passthrough_device(self):
+        self.assert_output_device(9, "/dev/input/event5")
+
+    def assert_output_device(self, version, expected):
+        devices = [
+            ("LGE M-RCU - Builtin [0]", "/dev/input/event3"),
+            ("LGE M-RCU - Builtin [1]", "/dev/input/event4"),
+            ("LGE M-RCU - Builtin [2]", "/dev/input/event5"),
+        ]
+        with mock.patch.object(managed_mapper.upstream, "WEBOS_MAJOR_VERSION", version), \
+                mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=devices):
+            self.assertEqual(managed_mapper.upstream.resolve_output_device(), expected)
+
+    def back_events(self, values=(1, 0)):
+        return b"".join(
+            struct.pack("llHHi", 1000 + index, 123456, event_type, code, event_value)
+            for index, value in enumerate(values)
+            for event_type, code, event_value in [(1, 412, value), (0, 0, 0)]
+        )
+
+    def run_loop(self, config, devices, exclusive=True, events=None, discover=False):
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = os.path.join(directory, "input")
+            output_path = os.path.join(directory, "output")
+            if events is None:
+                events = self.back_events()
+            Path(input_path).write_bytes(events)
+            Path(output_path).touch()
+            device_paths = [(name, input_path if source else output_path) for name, source in devices]
+            request_path = Path(directory, "discover-request.json")
+            if discover:
+                request_path.write_text(json.dumps({"id": "back-test", "timeout": 12}))
+
+            def readable(readers, writers, errors, timeout):
+                if readers[0].tell() == len(events):
+                    managed_mapper.STOP_REQUESTED = True
+                    return [], [], []
+                return readers, [], []
+
+            with mock.patch.multiple(managed_mapper, STATE_DIR=directory, APP_DIR=directory, STOP_REQUESTED=False), \
+                    mock.patch.multiple(managed_mapper.upstream, WEBOS_MAJOR_VERSION=10, EXCLUSIVE_MODE=exclusive), \
+                    mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=device_paths), \
+                    mock.patch.object(managed_mapper.fcntl, "ioctl"), \
+                    mock.patch.object(managed_mapper.select, "select", side_effect=readable), \
+                    mock.patch.object(managed_mapper.upstream, "luna_send", return_value='{"appId":"test-app"}'), \
+                    mock.patch.object(managed_mapper.upstream, "fire_events") as fire_events:
+                if discover:
+                    discovery = DiscoveryController(str(request_path), os.path.join(directory, "discover-result.json"), settle_seconds=0)
+                    with mock.patch.object(managed_mapper, "DiscoveryController", return_value=discovery):
+                        managed_mapper.input_loop(config)
+                else:
+                    managed_mapper.input_loop(config)
+                status = json.loads(Path(directory, "status.json").read_text())
+                output = Path(output_path).read_bytes()
+                actions = fire_events.call_args_list
+            return output, status, actions
+
+    def test_unmapped_back_is_forwarded_byte_for_byte(self):
+        events = self.back_events()
+        output, _, _ = self.run_loop({}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [1]", False),
+        ], events=events)
+        self.assertEqual(output, events)
+
+    def test_back_keydown_is_forwarded_before_release(self):
+        events = self.back_events((1,))
+        output, _, _ = self.run_loop({}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [1]", False),
+        ], events=events)
+        self.assertEqual(output, events)
+
+    def test_back_repeat_preserves_original_events_and_timestamps(self):
+        events = self.back_events((1, 2, 2, 0))
+        output, _, _ = self.run_loop({}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [1]", False),
+        ], events=events)
+        self.assertEqual(output, events)
+
+    def test_disabled_back_does_not_forward_key_events(self):
+        output, _, actions = self.run_loop({"back": "disabled"}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [1]", False),
+        ])
+        size = struct.calcsize("llHHi")
+        forwarded = [struct.unpack("llHHi", output[offset:offset + size])[2:] for offset in range(0, len(output), size)]
+        self.assertTrue(all(event_type != 1 for event_type, _, _ in forwarded))
+        self.assertEqual(actions, [])
+
+    def test_discovery_cancel_does_not_forward_back_key_events(self):
+        output, status, actions = self.run_loop({}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [1]", False),
+        ], discover=True)
+        size = struct.calcsize("llHHi")
+        forwarded = [struct.unpack("llHHi", output[offset:offset + size])[2:] for offset in range(0, len(output), size)]
+        self.assertTrue(all(event_type != 1 for event_type, _, _ in forwarded))
+        self.assertEqual(status["discovery"]["phase"], "complete")
+        self.assertEqual(actions, [])
+
+    def test_managed_loop_uses_upstream_output_fallback(self):
+        output, status, _ = self.run_loop({}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [2]", False),
+        ])
+        self.assertTrue(output)
+        self.assertIsNotNone(status["outputDevice"])
+        self.assertFalse(status["active"])
+        self.assertEqual(status["upstreamVersion"], "1.1.0")
+
+    def test_back_mapping_is_not_bypassed_by_passthrough(self):
+        action = {"function": "disabled"}
+        _, _, actions = self.run_loop({"back": action}, [
+            ("LGE M-RCU - Builtin [0]", True),
+            ("LGE M-RCU - Builtin [1]", False),
+        ])
+        self.assertEqual(actions, [mock.call([action])])
+
+    def test_nonexclusive_back_does_not_open_a_passthrough_device(self):
+        output, status, _ = self.run_loop({}, [("LGE M-RCU - Builtin [0]", True)], exclusive=False)
+        self.assertEqual(output, b"")
+        self.assertIsNone(status["outputDevice"])
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -203,10 +320,8 @@ class PassthroughWriteTests(unittest.TestCase):
 
     def tearDown(self):
         for fd in self.open_fds:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
         self.temp_dir.cleanup()
 
     def track(self, fd):

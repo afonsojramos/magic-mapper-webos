@@ -1,6 +1,5 @@
-from __future__ import print_function
-
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -18,12 +17,10 @@ if VENDOR_DIR not in sys.path:
 
 import magic_mapper as upstream
 from magic_mapper_runtime import (
-    DiscoveryController,
     RUNTIME_VERSION,
+    DiscoveryController,
     atomic_write_json,
     config_digest,
-    needs_clean_back_replay,
-    output_device_name,
 )
 
 with open(os.path.join(VENDOR_DIR, "upstream.json")) as upstream_file:
@@ -31,17 +28,9 @@ with open(os.path.join(VENDOR_DIR, "upstream.json")) as upstream_file:
 
 
 CONFIG_PATH = os.path.join(ROOT_DIR, "magic_mapper_config.json")
-STATE_DIR = "/tmp/magic-mapper"
+STATE_DIR = "/var/lib/webosbrew/magic-mapper"
 APP_DIR = ROOT_DIR
 STOP_REQUESTED = False
-
-
-def write_input_event(output_device, event_type, code, value):
-    now = time.time()
-    seconds = int(now)
-    microseconds = int((now - seconds) * 1000000)
-    event = struct.pack("llHHi", seconds, microseconds, event_type, code, value)
-    os.write(output_device, event)
 
 
 def open_input_device(path):
@@ -65,34 +54,19 @@ def write_passthrough(output_device, output_device_path, event):
             os.write(output_device, event)
             return output_device
         except OSError as write_err:
-            print("WARNING: passthrough write failed (%s), reopening output device" % write_err)
-            try:
+            print(f"WARNING: passthrough write failed ({write_err}), reopening output device")
+            with contextlib.suppress(OSError):
                 os.close(output_device)
-            except OSError:
-                pass
     try:
         reopened = os.open(output_device_path, os.O_WRONLY)
     except OSError as open_err:
-        print("ERROR: could not reopen output device: %s" % open_err)
+        print(f"ERROR: could not reopen output device: {open_err}")
         return None
     try:
         os.write(reopened, event)
     except OSError as retry_err:
-        print("ERROR: passthrough write failed after reopen: %s" % retry_err)
+        print(f"ERROR: passthrough write failed after reopen: {retry_err}")
     return reopened
-
-
-def replay_clean_keypress(output_device_path, code):
-    """Replace stale relayed event bytes with one fresh, complete keypress."""
-    output_device = os.open(output_device_path, os.O_WRONLY)
-    try:
-        write_input_event(output_device, 1, code, 1)
-        write_input_event(output_device, 0, 0, 0)
-        time.sleep(0.08)
-        write_input_event(output_device, 1, code, 0)
-        write_input_event(output_device, 0, 0, 0)
-    finally:
-        os.close(output_device)
 
 
 def load_config():
@@ -106,6 +80,7 @@ def write_status(active, button_map, input_device=None, output_device=None, disc
         "pid": os.getpid() if active else None,
         "version": RUNTIME_VERSION,
         "upstreamCommit": UPSTREAM_METADATA["commit"],
+        "upstreamVersion": upstream.VERSION,
         "configDigest": config_digest(button_map),
         "inputDevice": input_device,
         "outputDevice": output_device,
@@ -151,16 +126,15 @@ def input_loop(button_map):
     event_size = struct.calcsize(input_format)
     buttons_waiting = {}
     pressed_codes = set()
-    suppress_next_sync = False
     discovery = DiscoveryController(
         os.path.join(STATE_DIR, "discover-request.json"),
         os.path.join(STATE_DIR, "discover-result.json"),
     )
 
-    input_device_path = upstream.resolve_input_device_by_name(upstream.DEVICE_NAME)
+    input_device_path = upstream.resolve_input_device_by_name(upstream.INPUT_DEVICE_NAME)
     if not input_device_path:
         raise RuntimeError("Magic Remote input device was not found")
-    print("Opening input device: %s" % input_device_path)
+    print(f"Opening input device: {input_device_path}")
     input_device = open_input_device(input_device_path)
     output_device_path = None
     output_device = None
@@ -169,14 +143,10 @@ def input_loop(button_map):
         if upstream.EXCLUSIVE_MODE:
             print("EXCLUSIVE_MODE is enabled, taking over input device")
             fcntl.ioctl(input_device, upstream.EVIOCGRAB, 1)
-            passthrough_device_name = output_device_name(
-                upstream.WEBOS_MAJOR_VERSION,
-                upstream.OUTPUT_DEVICE_NAME,
-            )
-            output_device_path = upstream.resolve_input_device_by_name(passthrough_device_name)
+            output_device_path = upstream.resolve_output_device()
             if not output_device_path:
                 raise RuntimeError("Magic Remote output device was not found")
-            print("Keys will be resent to %s: %s" % (passthrough_device_name, output_device_path))
+            print(f"Keys will be resent to: {output_device_path}")
             output_device = os.open(output_device_path, os.O_WRONLY)
         else:
             print("EXCLUSIVE_MODE is disabled, default actions cannot be blocked")
@@ -205,10 +175,6 @@ def input_loop(button_map):
             unused_sec, unused_usec, event_type, code, value = struct.unpack(input_format, event)
             del unused_sec, unused_usec
 
-            if suppress_next_sync and event_type == 0:
-                suppress_next_sync = False
-                continue
-
             now = time.time()
             key = None
             if event_type == 1:
@@ -231,18 +197,10 @@ def input_loop(button_map):
                 value = 0
                 buttons_waiting[code] = now
 
-            if needs_clean_back_replay(upstream.WEBOS_MAJOR_VERSION, event_type, code):
-                if value == 1:
-                    suppress_next_sync = True
-                if value == 0:
-                    print("Replaying Back as a clean webOS 25 keypress")
-                    replay_clean_keypress(output_device_path, code)
-                continue
-
             actions = button_map.get(key)
             if actions == "disabled":
                 if value == 1:
-                    print("Button %s is disabled" % key)
+                    print(f"Button {key} is disabled")
                 continue
             actions = actions_for_app(actions)
 
@@ -250,36 +208,34 @@ def input_loop(button_map):
                 if upstream.EXCLUSIVE_MODE and not (upstream.BLOCK_MOUSE and code == 1198):
                     output_device = write_passthrough(output_device, output_device_path, event)
                 if key and value == 1:
-                    print("Button %s is unchanged" % key)
+                    print(f"Button {key} is unchanged")
                 elif value == 1:
-                    print("Button code %s ignored" % code)
+                    print(f"Button code {code} ignored")
                 continue
 
             if value == 1:
-                print("%s button down" % key)
+                print(f"{key} button down")
                 if code in buttons_waiting and now - buttons_waiting[code] < 1.0:
-                    print("WARNING: Got code %s DOWN while waiting for UP" % code)
+                    print(f"WARNING: Got code {code} DOWN while waiting for UP")
                 buttons_waiting[code] = now
 
             if value == 0:
                 if code not in buttons_waiting:
-                    print("WARNING: Got code %s UP with no DOWN" % code)
+                    print(f"WARNING: Got code {code} UP with no DOWN")
                 elif now - buttons_waiting[code] > 1.0:
-                    print("Ignoring long press of %s" % key)
+                    print(f"Ignoring long press of {key}")
                     upstream.luna_send(
                         "luna://com.webos.notification/createToast",
-                        {"sourceId": "magic mapper", "message": "long press for %s is disabled due to magic mapper" % key},
+                        {"sourceId": "magic mapper", "message": f"long press for {key} is disabled due to magic mapper"},
                     )
                 else:
-                    print("Firing action(s) for %s" % key)
+                    print(f"Firing action(s) for {key}")
                     upstream.fire_events(actions)
                 buttons_waiting.pop(code, None)
     finally:
         if upstream.EXCLUSIVE_MODE:
-            try:
+            with contextlib.suppress(OSError):
                 fcntl.ioctl(input_device, upstream.EVIOCGRAB, 0)
-            except (IOError, OSError):
-                pass
         input_device.close()
         if output_device is not None:
             os.close(output_device)
@@ -300,13 +256,13 @@ def main():
     APP_DIR = os.path.abspath(args.app_dir)
     upstream.BLOCK_MOUSE = args.block_mouse
 
-    print("Starting managed Magic Mapper")
+    print(f"Starting managed Magic Mapper (upstream {upstream.VERSION})")
     if not args.no_start_delay:
         time.sleep(2)
     button_map = load_config()
     upstream.WEBOS_MAJOR_VERSION = upstream.get_webos_version()
-    print("WEBOS_MAJOR_VERSION: %s" % upstream.WEBOS_MAJOR_VERSION)
-    print("BLOCK_MOUSE: %s" % upstream.BLOCK_MOUSE)
+    print(f"WEBOS_MAJOR_VERSION: {upstream.WEBOS_MAJOR_VERSION}")
+    print(f"BLOCK_MOUSE: {upstream.BLOCK_MOUSE}")
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     input_loop(button_map)
