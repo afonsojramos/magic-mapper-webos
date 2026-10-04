@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/afonsojramos/magic-mapper-webos/compare/v1.1.1...v1.1.2) (2026-10-04)
+
+
+### Bug Fixes
+
+* **runtime:** adopt upstream 1.1.0 Back passthrough ([292a03f](https://github.com/afonsojramos/magic-mapper-webos/commit/292a03fd3a1b52dd745cdca8916fefeab659d809))
+
 ## [1.1.1](https://github.com/afonsojramos/magic-mapper-webos/compare/v1.1.0...v1.1.1) (2026-08-26)
 
 
