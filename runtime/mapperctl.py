@@ -32,7 +32,10 @@ SETTINGS_PATH = os.path.join(STATE_DIR, "settings.json")
 PID_PATH = os.path.join(STATE_DIR, "magic-mapper.pid")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 LOG_PATH = os.path.join(STATE_DIR, "magic-mapper.log")
-HOOK_PATH = "/var/lib/webosbrew/init.d/50-magic-mapper"
+# Homebrew runs init.d hooks one at a time in name order. This hook waits for the mapper, so it
+# sorts after Luma's 64-luma-home Home takeover.
+HOOK_PATH = "/var/lib/webosbrew/init.d/70-magic-mapper"
+PREVIOUS_HOOK = "/var/lib/webosbrew/init.d/50-magic-mapper"
 LEGACY_CONFIG = "/home/root/magic_mapper_config.json"
 LEGACY_HOOK = "/var/lib/webosbrew/init.d/start_magic_mapper"
 
@@ -184,6 +187,20 @@ fi
     os.chmod(HOOK_PATH, 0o755)
 
 
+def remove_old_hooks():
+    for path in (PREVIOUS_HOOK, LEGACY_HOOK):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def migrate_hook():
+    if os.path.isfile(PREVIOUS_HOOK):
+        install_hook()
+        os.unlink(PREVIOUS_HOOK)
+
+
 def install():
     ensure_state()
     migrated = False
@@ -202,10 +219,7 @@ def install():
         atomic_write_json(SETTINGS_PATH, {"block_mouse": False})
     install_hook()
     stop_legacy_mapper()
-    try:
-        os.unlink(LEGACY_HOOK)
-    except OSError:
-        pass
+    remove_old_hooks()
     pid, started = start_mapper()
     return migrated, pid, started
 
@@ -213,7 +227,8 @@ def install():
 def status():
     pid = read_pid()
     running = process_matches(pid)
-    data = {"installed": os.path.isfile(HOOK_PATH), "active": running, "pid": pid if running else None}
+    installed = os.path.isfile(HOOK_PATH) or os.path.isfile(PREVIOUS_HOOK)
+    data = {"installed": installed, "active": running, "pid": pid if running else None}
     try:
         with open(STATUS_PATH) as status_file:
             runtime = json.load(status_file)
@@ -342,7 +357,7 @@ def tail_log():
 
 def remove():
     stop_mapper()
-    for path in (HOOK_PATH, LEGACY_HOOK):
+    for path in (HOOK_PATH, PREVIOUS_HOOK, LEGACY_HOOK):
         try:
             os.unlink(path)
         except OSError:
@@ -382,6 +397,7 @@ def main():
             result(status=status())
         elif args.command == "start":
             pid, started = start_mapper()
+            migrate_hook()
             result(pid=pid, started=started, status=status())
         elif args.command == "stop":
             result(stopped=stop_mapper(), status=status())

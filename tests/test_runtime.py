@@ -414,3 +414,73 @@ class InputDeviceReadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HookTests(unittest.TestCase):
+    def setUp(self):
+        import mapperctl
+
+        self.mapperctl = mapperctl
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.hook = self.root / "70-magic-mapper"
+        self.previous = self.root / "50-magic-mapper"
+        self.legacy = self.root / "start_magic_mapper"
+        for name, value in (("HOOK_PATH", self.hook), ("PREVIOUS_HOOK", self.previous),
+                            ("LEGACY_HOOK", self.legacy), ("STATE_DIR", self.root / "state")):
+            patcher = mock.patch.object(mapperctl, name, str(value))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_hook_runs_after_luma_home(self):
+        # Homebrew runs hooks sequentially in name order, and start waits for the mapper.
+        import mapperctl
+
+        self.assertGreater(os.path.basename(mapperctl.HOOK_PATH), "64-luma-home")
+        self.assertEqual(os.path.basename(mapperctl.PREVIOUS_HOOK), "50-magic-mapper")
+
+    def test_start_moves_the_previous_hook(self):
+        self.previous.write_text("old hook\n")
+        with mock.patch.object(self.mapperctl, "start_mapper", return_value=(42, True)), \
+                mock.patch.object(self.mapperctl, "status", return_value={}), \
+                mock.patch.object(sys, "argv", ["mapperctl.py", "start"]), \
+                contextlib.redirect_stdout(open(os.devnull, "w")):
+            self.assertEqual(self.mapperctl.main(), 0)
+        self.assertFalse(self.previous.exists())
+        self.assertIn("mapperctl.py\" start", self.hook.read_text())
+        self.assertTrue(os.access(self.hook, os.X_OK))
+
+    def test_start_does_not_create_a_missing_hook(self):
+        with mock.patch.object(self.mapperctl, "start_mapper", return_value=(42, True)), \
+                mock.patch.object(self.mapperctl, "status", return_value={}), \
+                mock.patch.object(sys, "argv", ["mapperctl.py", "start"]), \
+                contextlib.redirect_stdout(open(os.devnull, "w")):
+            self.assertEqual(self.mapperctl.main(), 0)
+        self.assertFalse(self.hook.exists())
+
+    def test_install_replaces_previous_hook_names(self):
+        self.previous.write_text("old hook\n")
+        self.legacy.write_text("legacy hook\n")
+        with mock.patch.object(self.mapperctl, "ensure_state"), \
+                mock.patch.object(self.mapperctl, "atomic_write_json"), \
+                mock.patch.object(self.mapperctl, "stop_legacy_mapper"), \
+                mock.patch.object(self.mapperctl, "start_mapper", return_value=(42, True)):
+            self.mapperctl.install()
+        self.assertTrue(self.hook.exists())
+        self.assertFalse(self.previous.exists())
+        self.assertFalse(self.legacy.exists())
+
+    def test_remove_deletes_every_hook_name(self):
+        for path in (self.hook, self.previous, self.legacy):
+            path.write_text("hook\n")
+        with mock.patch.object(self.mapperctl, "stop_mapper"):
+            self.mapperctl.remove()
+        for path in (self.hook, self.previous, self.legacy):
+            self.assertFalse(path.exists())
+
+    def test_status_counts_an_unmigrated_hook_as_installed(self):
+        self.previous.write_text("old hook\n")
+        with mock.patch.object(self.mapperctl, "read_pid", return_value=None), \
+                mock.patch.object(self.mapperctl, "process_matches", return_value=False):
+            self.assertTrue(self.mapperctl.status()["installed"])
