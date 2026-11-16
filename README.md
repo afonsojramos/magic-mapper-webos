@@ -214,7 +214,10 @@ repository is a placeholder that the release build overwrites.
 ## State and removal
 
 Mappings and runtime state live under `/var/lib/webosbrew/magic-mapper`. The startup hook lives at
-`/var/lib/webosbrew/init.d/50-magic-mapper`.
+`/var/lib/webosbrew/init.d/70-magic-mapper`. Homebrew runs startup hooks one at a time in name
+order, and this hook waits for the mapper to start, so its name sorts after Luma's `64-luma-home`
+Home takeover. A hook installed under the earlier `50-magic-mapper` name moves to the new name the
+next time it starts the mapper.
 
 Uninstalling from the app stops the process, releases the exclusive input grab, removes the startup
 hook and state, and asks webOS to remove the application.
