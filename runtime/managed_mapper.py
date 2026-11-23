@@ -8,6 +8,7 @@ import signal
 import struct
 import sys
 import time
+import traceback
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -74,7 +75,15 @@ def load_config():
         return json.load(config_file)
 
 
-def write_status(active, button_map, input_device=None, output_device=None, discovery=None, error=None):
+def write_status(
+    active,
+    button_map,
+    input_device=None,
+    output_device=None,
+    discovery=None,
+    error=None,
+    ir_input_device=None,
+):
     status = {
         "active": active,
         "pid": os.getpid() if active else None,
@@ -83,6 +92,7 @@ def write_status(active, button_map, input_device=None, output_device=None, disc
         "upstreamVersion": upstream.VERSION,
         "configDigest": config_digest(button_map),
         "inputDevice": input_device,
+        "irInputDevice": ir_input_device,
         "outputDevice": output_device,
         "exclusive": upstream.EXCLUSIVE_MODE,
         "updatedAt": int(time.time()),
@@ -105,20 +115,69 @@ def actions_for_app(actions):
         return actions
     if type(actions) is not list:
         actions = [actions]
-    response = upstream.luna_send("luna://com.webos.applicationManager/getForegroundAppInfo", {})
-    current_app = json.loads(response).get("appId")
+    if all(action.get("appId") is None for action in actions):
+        return actions
+    current_app = None
+    try:
+        response = upstream.luna_send("luna://com.webos.applicationManager/getForegroundAppInfo", {})
+        current_app = json.loads(response).get("appId")
+    except Exception:
+        print("ERROR: could not get foreground app, using only unconditional mappings")
+        traceback.print_exc()
     filtered = []
     found_match = False
     for action in actions:
         app_id = action.get("appId")
         if app_id is None:
             filtered.append(action)
-        if app_id == current_app:
+        elif current_app is not None and app_id == current_app:
             filtered.append(action)
             found_match = True
-        if app_id == "!" and not found_match:
+        elif current_app is not None and app_id == "!" and not found_match:
             filtered.append(action)
     return filtered
+
+
+def _close_source(source):
+    if source["grabbed"]:
+        with contextlib.suppress(OSError):
+            fcntl.ioctl(source["reader"], upstream.EVIOCGRAB, 0)
+    with contextlib.suppress(OSError):
+        source["reader"].close()
+
+
+def _open_source(device_name, grab, required=False):
+    device_path = upstream.resolve_input_device_by_name(device_name)
+    if not device_path:
+        if required:
+            raise RuntimeError("Magic Remote input device was not found")
+        print(f"WARNING: optional input device '{device_name}' was not found")
+        return None
+    print(f"Opening input device: {device_path} ({device_name})")
+    try:
+        reader = open_input_device(device_path)
+    except OSError as error:
+        if required:
+            raise
+        print(f"WARNING: could not open input device '{device_name}' ({device_path}): {error}")
+        return None
+    grabbed = False
+    if grab:
+        try:
+            fcntl.ioctl(reader, upstream.EVIOCGRAB, 1)
+            grabbed = True
+        except OSError as error:
+            if required:
+                reader.close()
+                raise
+            print(f"WARNING: could not grab input device '{device_name}' ({device_path}): {error}")
+    return {
+        "name": device_name,
+        "path": device_path,
+        "reader": reader,
+        "grabbed": grabbed,
+        "required": required,
+    }
 
 
 def input_loop(button_map):
@@ -131,18 +190,29 @@ def input_loop(button_map):
         os.path.join(STATE_DIR, "discover-result.json"),
     )
 
-    input_device_path = upstream.resolve_input_device_by_name(upstream.INPUT_DEVICE_NAME)
-    if not input_device_path:
-        raise RuntimeError("Magic Remote input device was not found")
-    print(f"Opening input device: {input_device_path}")
-    input_device = open_input_device(input_device_path)
+    sources = {}
+    input_device_path = None
+    ir_input_device_path = None
     output_device_path = None
     output_device = None
 
     try:
-        if upstream.EXCLUSIVE_MODE:
-            print("EXCLUSIVE_MODE is enabled, taking over input device")
-            fcntl.ioctl(input_device, upstream.EVIOCGRAB, 1)
+        primary = _open_source(upstream.INPUT_DEVICE_NAME, upstream.EXCLUSIVE_MODE, required=True)
+        input_device_path = primary["path"]
+        sources[primary["reader"]] = primary
+        if upstream.IR_INPUT_ENABLED:
+            if upstream.IR_INPUT_DEVICE_NAME == upstream.INPUT_DEVICE_NAME:
+                print("IR input device matches primary input device, not opening twice")
+            else:
+                ir_source = _open_source(
+                    upstream.IR_INPUT_DEVICE_NAME, upstream.IR_EXCLUSIVE_MODE, required=False
+                )
+                if ir_source:
+                    sources[ir_source["reader"]] = ir_source
+                    ir_input_device_path = ir_source["path"]
+
+        if any(source["grabbed"] for source in sources.values()):
+            print("Exclusive mode is enabled, taking over input device(s)")
             output_device_path = upstream.resolve_output_device()
             if not output_device_path:
                 raise RuntimeError("Magic Remote output device was not found")
@@ -151,95 +221,167 @@ def input_loop(button_map):
         else:
             print("EXCLUSIVE_MODE is disabled, default actions cannot be blocked")
 
-        write_status(True, button_map, input_device_path, output_device_path, discovery)
+        write_status(
+            True,
+            button_map,
+            input_device_path,
+            output_device_path,
+            discovery,
+            ir_input_device=ir_input_device_path,
+        )
         print("Magic Mapper is running")
         last_status = 0
 
-        while not STOP_REQUESTED:
+        while not STOP_REQUESTED and sources:
             now = time.time()
             discovery.poll(pressed_codes, now)
             if now - last_status >= 2:
-                write_status(True, button_map, input_device_path, output_device_path, discovery)
+                write_status(
+                    True,
+                    button_map,
+                    input_device_path,
+                    output_device_path,
+                    discovery,
+                    ir_input_device=ir_input_device_path,
+                )
                 last_status = now
             if APP_DIR and not os.path.isdir(APP_DIR):
                 print("Application directory was removed, exiting")
                 break
 
-            readable, unused_write, unused_error = select.select([input_device], [], [], 0.25)
+            readable, unused_write, unused_error = select.select(list(sources), [], [], 0.25)
             del unused_write, unused_error
             if not readable:
                 continue
-            event = input_device.read(event_size)
-            if len(event) != event_size:
-                continue
-            unused_sec, unused_usec, event_type, code, value = struct.unpack(input_format, event)
-            del unused_sec, unused_usec
-
-            now = time.time()
-            key = None
-            if event_type == 1:
-                key = upstream.BUTTONS.get(code)
-                if discovery.handle_key(code, value, key, pressed_codes, now):
-                    if value == 1:
-                        pressed_codes.add(code)
-                    elif value == 0:
-                        pressed_codes.discard(code)
-                    write_status(True, button_map, input_device_path, output_device_path, discovery)
+            lost_primary = False
+            for reader in readable:
+                source = sources.get(reader)
+                if not source:
                     continue
-                if value == 1:
-                    pressed_codes.add(code)
-                elif value == 0:
-                    pressed_codes.discard(code)
-                discovery.poll(pressed_codes, now)
-            elif event_type == 2:
-                code = value
-                key = upstream.MOUSE_WHEEL.get(code)
-                value = 0
-                buttons_waiting[code] = now
-
-            actions = button_map.get(key)
-            if actions == "disabled":
-                if value == 1:
-                    print(f"Button {key} is disabled")
-                continue
-            actions = actions_for_app(actions)
-
-            if not actions:
-                if upstream.EXCLUSIVE_MODE and not (upstream.BLOCK_MOUSE and code == 1198):
-                    output_device = write_passthrough(output_device, output_device_path, event)
-                if key and value == 1:
-                    print(f"Button {key} is unchanged")
-                elif value == 1:
-                    print(f"Button code {code} ignored")
-                continue
-
-            if value == 1:
-                print(f"{key} button down")
-                if code in buttons_waiting and now - buttons_waiting[code] < 1.0:
-                    print(f"WARNING: Got code {code} DOWN while waiting for UP")
-                buttons_waiting[code] = now
-
-            if value == 0:
-                if code not in buttons_waiting:
-                    print(f"WARNING: Got code {code} UP with no DOWN")
-                elif now - buttons_waiting[code] > 1.0:
-                    print(f"Ignoring long press of {key}")
-                    upstream.luna_send(
-                        "luna://com.webos.notification/createToast",
-                        {"sourceId": "magic mapper", "message": f"long press for {key} is disabled due to magic mapper"},
+                try:
+                    event = reader.read(event_size)
+                except OSError as error:
+                    print(f"WARNING: could not read input device '{source['name']}': {error}")
+                    event = b""
+                if not event:
+                    if source["required"]:
+                        print(f"ERROR: lost primary input device '{source['name']}', exiting")
+                        lost_primary = True
+                        break
+                    print(f"WARNING: lost optional input device '{source['name']}', detaching it")
+                    _close_source(source)
+                    sources.pop(reader, None)
+                    if source["path"] == ir_input_device_path:
+                        ir_input_device_path = None
+                    for key in [k for k in buttons_waiting if k[0] == source["name"]]:
+                        buttons_waiting.pop(key, None)
+                    pressed_codes = {k for k in pressed_codes if k[0] != source["name"]}
+                    write_status(
+                        True,
+                        button_map,
+                        input_device_path,
+                        output_device_path,
+                        discovery,
+                        ir_input_device=ir_input_device_path,
                     )
-                else:
-                    print(f"Firing action(s) for {key}")
-                    upstream.fire_events(actions)
-                buttons_waiting.pop(code, None)
+                    continue
+                if len(event) != event_size:
+                    continue
+                unused_sec, unused_usec, event_type, code, value = struct.unpack(input_format, event)
+                del unused_sec, unused_usec
+
+                now = time.time()
+                key = None
+                wait_key = (source["name"], code)
+                if event_type == 1:
+                    key = upstream.BUTTONS.get(code)
+                    if discovery.handle_key(code, value, key, pressed_codes, now):
+                        if value == 1:
+                            pressed_codes.add(wait_key)
+                        elif value == 0:
+                            pressed_codes.discard(wait_key)
+                        write_status(
+                            True,
+                            button_map,
+                            input_device_path,
+                            output_device_path,
+                            discovery,
+                            ir_input_device=ir_input_device_path,
+                        )
+                        continue
+                    if value == 1:
+                        pressed_codes.add(wait_key)
+                    elif value == 0:
+                        pressed_codes.discard(wait_key)
+                    discovery.poll(pressed_codes, now)
+                elif event_type == 2:
+                    code = value
+                    key = upstream.MOUSE_WHEEL.get(code)
+                    value = 0
+                    wait_key = (source["name"], code)
+                    buttons_waiting[wait_key] = now
+
+                actions = button_map.get(key)
+                if actions == "disabled":
+                    if value == 1:
+                        print(f"Button {key} is disabled")
+                    continue
+                actions = actions_for_app(actions)
+
+                if not actions:
+                    if source["grabbed"] and not (upstream.BLOCK_MOUSE and code == 1198):
+                        output_device = write_passthrough(output_device, output_device_path, event)
+                    if key and value == 1:
+                        print(f"Button {key} is unchanged")
+                    elif value == 1:
+                        print(f"Button code {code} ignored")
+                    continue
+
+                if value == 1:
+                    print(f"{key} button down")
+                    if wait_key in buttons_waiting and now - buttons_waiting[wait_key] < 1.0:
+                        print(f"WARNING: Got code {code} DOWN while waiting for UP")
+                    buttons_waiting[wait_key] = now
+
+                if value == 0:
+                    if wait_key not in buttons_waiting:
+                        print(f"WARNING: Got code {code} UP with no DOWN")
+                    elif now - buttons_waiting[wait_key] > 1.0:
+                        print(f"Ignoring long press of {key}")
+                        try:
+                            upstream.luna_send(
+                                "luna://com.webos.notification/createToast",
+                                {
+                                    "sourceId": "magic mapper",
+                                    "message": f"long press for {key} is disabled due to magic mapper",
+                                },
+                            )
+                        except Exception:
+                            traceback.print_exc()
+                    else:
+                        print(f"Firing action(s) for {key}")
+                        try:
+                            upstream.fire_events(actions)
+                        except Exception:
+                            print(f"ERROR: action for button {key} failed")
+                            traceback.print_exc()
+                    buttons_waiting.pop(wait_key, None)
+            if lost_primary:
+                break
     finally:
-        if upstream.EXCLUSIVE_MODE:
-            with contextlib.suppress(OSError):
-                fcntl.ioctl(input_device, upstream.EVIOCGRAB, 0)
-        input_device.close()
+        for source in list(sources.values()):
+            _close_source(source)
         if output_device is not None:
-            os.close(output_device)
-        write_status(False, button_map, input_device_path, output_device_path, discovery)
+            with contextlib.suppress(OSError):
+                os.close(output_device)
+        write_status(
+            False,
+            button_map,
+            input_device_path,
+            output_device_path,
+            discovery,
+            ir_input_device=ir_input_device_path,
+        )
 
 
 def main():
@@ -249,12 +391,16 @@ def main():
     parser.add_argument("--state-dir", default=STATE_DIR)
     parser.add_argument("--app-dir", default=APP_DIR)
     parser.add_argument("--block-mouse", action="store_true")
+    parser.add_argument("--ir-input", action="store_true")
+    parser.add_argument("--no-ir-exclusive", action="store_true")
     parser.add_argument("--no-start-delay", action="store_true")
     args = parser.parse_args()
     CONFIG_PATH = os.path.abspath(args.config)
     STATE_DIR = os.path.abspath(args.state_dir)
     APP_DIR = os.path.abspath(args.app_dir)
     upstream.BLOCK_MOUSE = args.block_mouse
+    upstream.IR_INPUT_ENABLED = args.ir_input
+    upstream.IR_EXCLUSIVE_MODE = not args.no_ir_exclusive
 
     print(f"Starting managed Magic Mapper (upstream {upstream.VERSION})")
     if not args.no_start_delay:
@@ -263,6 +409,8 @@ def main():
     upstream.WEBOS_MAJOR_VERSION = upstream.get_webos_version()
     print(f"WEBOS_MAJOR_VERSION: {upstream.WEBOS_MAJOR_VERSION}")
     print(f"BLOCK_MOUSE: {upstream.BLOCK_MOUSE}")
+    print(f"IR_INPUT_ENABLED: {upstream.IR_INPUT_ENABLED}")
+    print(f"IR_EXCLUSIVE_MODE: {upstream.IR_EXCLUSIVE_MODE}")
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     input_loop(button_map)

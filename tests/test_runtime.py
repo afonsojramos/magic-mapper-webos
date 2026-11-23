@@ -3,7 +3,9 @@ import hashlib
 import json
 import os
 import select
+import stat
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -33,7 +35,7 @@ class ConfigValidationTests(unittest.TestCase):
         catalog = load_action_catalog()
         self.assertEqual(
             {action["id"] for action in catalog["actions"]},
-            set(managed_mapper.upstream.CONFIG_FUNCTIONS) - {"toggle_bluetooth"},
+            set(managed_mapper.upstream.CONFIG_FUNCTIONS),
         )
 
     def test_accepts_representative_inputs_for_every_action(self):
@@ -56,6 +58,7 @@ class ConfigValidationTests(unittest.TestCase):
             {"function": "disabled", "inputs": {}},
             {"function": "send_tcp_command", "inputs": {"ip": "192.168.1.50", "port": 23, "command": "POWER ON", "timeout": 2.5}},
             {"function": "toggle_piccap", "inputs": {}},
+            {"function": "toggle_bluetooth", "inputs": {"notifications": True}},
         ]
         config = {"netflix": actions}
         self.assertIs(validate_config(config, BUTTONS, functions), config)
@@ -77,10 +80,12 @@ class ConfigValidationTests(unittest.TestCase):
                 validate_config({"netflix": action}, BUTTONS, functions)
 
     def test_validates_global_settings(self):
-        settings = {"block_mouse": True}
+        settings = {"block_mouse": True, "ir_input_enabled": True, "ir_exclusive_mode": False}
         self.assertIs(validate_settings(settings), settings)
         with self.assertRaisesRegex(ValueError, "true or false"):
             validate_settings({"block_mouse": "yes"})
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            validate_settings({"ir_input_enabled": 1})
         with self.assertRaisesRegex(ValueError, "Unknown setting"):
             validate_settings({"block_mouse": False, "other": True})
 
@@ -257,6 +262,122 @@ class UpstreamCompatibilityTests(unittest.TestCase):
         self.assertEqual(output, b"")
         self.assertIsNone(status["outputDevice"])
 
+    def test_ir_input_reads_from_ir_receiver_and_records_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bt_path = os.path.join(directory, "bt")
+            ir_path = os.path.join(directory, "ir")
+            output_path = os.path.join(directory, "output")
+            ir_events = self.back_events()
+            Path(bt_path).write_bytes(b"")
+            Path(ir_path).write_bytes(ir_events)
+            Path(output_path).touch()
+            device_paths = [
+                ("LGE M-RCU - Builtin [0]", bt_path),
+                ("LGE RCU", ir_path),
+                ("LGE M-RCU - Builtin [1]", output_path),
+            ]
+            action = {"function": "toggle_bluetooth", "inputs": {"notifications": True}}
+
+            def readable(readers, writers, errors, timeout):
+                del writers, errors, timeout
+                ir_reader = next(reader for reader in readers if reader.name == ir_path)
+                if ir_reader.tell() == len(ir_events):
+                    managed_mapper.STOP_REQUESTED = True
+                    return [], [], []
+                return [ir_reader], [], []
+
+            with mock.patch.multiple(managed_mapper, STATE_DIR=directory, APP_DIR=directory, STOP_REQUESTED=False), \
+                    mock.patch.multiple(
+                        managed_mapper.upstream,
+                        WEBOS_MAJOR_VERSION=10,
+                        EXCLUSIVE_MODE=True,
+                        IR_INPUT_ENABLED=True,
+                        IR_EXCLUSIVE_MODE=True,
+                    ), \
+                    mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=device_paths), \
+                    mock.patch.object(managed_mapper.fcntl, "ioctl"), \
+                    mock.patch.object(managed_mapper.select, "select", side_effect=readable), \
+                    mock.patch.object(managed_mapper.upstream, "fire_events") as fire_events:
+                managed_mapper.input_loop({"back": action})
+                status = json.loads(Path(directory, "status.json").read_text())
+            self.assertEqual(status["irInputDevice"], ir_path)
+            self.assertEqual(fire_events.call_args_list, [mock.call([action])])
+
+    def test_actions_for_app_survives_luna_error(self):
+        actions = [
+            {"function": "screen_off", "inputs": {}},
+            {"function": "disabled", "inputs": {}, "appId": "cdp-30"},
+            {"function": "toggle_piccap", "inputs": {}, "appId": "!"},
+        ]
+        with mock.patch.object(managed_mapper.upstream, "luna_send", side_effect=OSError("boom")):
+            filtered = managed_mapper.actions_for_app(actions)
+        self.assertEqual(filtered, [{"function": "screen_off", "inputs": {}}])
+
+    def test_optional_ir_eof_detaches_without_stopping_primary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bt_path = os.path.join(directory, "bt")
+            ir_path = os.path.join(directory, "ir")
+            output_path = os.path.join(directory, "output")
+            bt_events = self.back_events()
+            Path(bt_path).write_bytes(bt_events)
+            Path(ir_path).write_bytes(b"")
+            Path(output_path).touch()
+            device_paths = [
+                ("LGE M-RCU - Builtin [0]", bt_path),
+                ("LGE RCU", ir_path),
+                ("LGE M-RCU - Builtin [1]", output_path),
+            ]
+            action = {"function": "screen_off", "inputs": {}}
+            step = {"count": 0}
+
+            def readable(readers, writers, errors, timeout):
+                del writers, errors, timeout
+                step["count"] += 1
+                if step["count"] == 1:
+                    ir_reader = next(reader for reader in readers if reader.name == ir_path)
+                    return [ir_reader], [], []
+                bt_reader = next(reader for reader in readers if reader.name == bt_path)
+                if bt_reader.tell() == len(bt_events):
+                    managed_mapper.STOP_REQUESTED = True
+                    return [], [], []
+                return [bt_reader], [], []
+
+            with mock.patch.multiple(managed_mapper, STATE_DIR=directory, APP_DIR=directory, STOP_REQUESTED=False), \
+                    mock.patch.multiple(
+                        managed_mapper.upstream,
+                        WEBOS_MAJOR_VERSION=10,
+                        EXCLUSIVE_MODE=True,
+                        IR_INPUT_ENABLED=True,
+                        IR_EXCLUSIVE_MODE=True,
+                    ), \
+                    mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=device_paths), \
+                    mock.patch.object(managed_mapper.fcntl, "ioctl"), \
+                    mock.patch.object(managed_mapper.select, "select", side_effect=readable), \
+                    mock.patch.object(managed_mapper.upstream, "fire_events") as fire_events:
+                managed_mapper.input_loop({"back": action})
+                status = json.loads(Path(directory, "status.json").read_text())
+            self.assertIsNone(status["irInputDevice"])
+            self.assertEqual(fire_events.call_args_list, [mock.call([action])])
+
+    def test_primary_eof_exits_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bt_path = os.path.join(directory, "bt")
+            output_path = os.path.join(directory, "output")
+            Path(bt_path).write_bytes(b"")
+            Path(output_path).touch()
+            device_paths = [
+                ("LGE M-RCU - Builtin [0]", bt_path),
+                ("LGE M-RCU - Builtin [1]", output_path),
+            ]
+            with mock.patch.multiple(managed_mapper, STATE_DIR=directory, APP_DIR=directory, STOP_REQUESTED=False), \
+                    mock.patch.multiple(managed_mapper.upstream, WEBOS_MAJOR_VERSION=10, EXCLUSIVE_MODE=True, IR_INPUT_ENABLED=False), \
+                    mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=device_paths), \
+                    mock.patch.object(managed_mapper.fcntl, "ioctl"), \
+                    mock.patch.object(managed_mapper.select, "select", side_effect=lambda r, w, e, t: (r, [], [])):
+                managed_mapper.input_loop({})
+                status = json.loads(Path(directory, "status.json").read_text())
+            self.assertFalse(status["active"])
+
 
 class DiscoveryTests(unittest.TestCase):
     def setUp(self):
@@ -412,10 +533,6 @@ class InputDeviceReadTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HookTests(unittest.TestCase):
     def setUp(self):
         import mapperctl
@@ -424,31 +541,43 @@ class HookTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        self.hook = self.root / "70-magic-mapper"
-        self.previous = self.root / "50-magic-mapper"
+        self.hook = self.root / "z-magic-mapper"
+        self.prev_70 = self.root / "70-magic-mapper"
+        self.prev_50 = self.root / "50-magic-mapper"
         self.legacy = self.root / "start_magic_mapper"
-        for name, value in (("HOOK_PATH", self.hook), ("PREVIOUS_HOOK", self.previous),
-                            ("LEGACY_HOOK", self.legacy), ("STATE_DIR", self.root / "state")):
-            patcher = mock.patch.object(mapperctl, name, str(value))
+        self.log_path = self.root / "state" / "magic-mapper.log"
+        for name, value in (
+            ("HOOK_PATH", str(self.hook)),
+            ("PREVIOUS_HOOKS", (str(self.prev_70), str(self.prev_50))),
+            ("LEGACY_HOOK", str(self.legacy)),
+            ("STATE_DIR", str(self.root / "state")),
+            ("LOG_PATH", str(self.log_path)),
+        ):
+            patcher = mock.patch.object(mapperctl, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_hook_runs_after_luma_home(self):
-        # Homebrew runs hooks sequentially in name order, and start waits for the mapper.
+    def test_hook_runs_after_luma_home_and_entware(self):
+        # Homebrew runs hooks sequentially in name order; sort after both 64-luma-home and S99entware.
         import mapperctl
 
-        self.assertGreater(os.path.basename(mapperctl.HOOK_PATH), "64-luma-home")
-        self.assertEqual(os.path.basename(mapperctl.PREVIOUS_HOOK), "50-magic-mapper")
+        hook_name = os.path.basename(mapperctl.HOOK_PATH)
+        self.assertGreater(hook_name, "64-luma-home")
+        self.assertGreater(hook_name, "S99entware")
+        self.assertIn("70-magic-mapper", [os.path.basename(path) for path in mapperctl.PREVIOUS_HOOKS])
+        self.assertIn("50-magic-mapper", [os.path.basename(path) for path in mapperctl.PREVIOUS_HOOKS])
 
-    def test_start_moves_the_previous_hook(self):
-        self.previous.write_text("old hook\n")
+    def test_start_moves_previous_hooks(self):
+        self.prev_70.write_text("old 70 hook\n")
+        self.prev_50.write_text("old 50 hook\n")
         with mock.patch.object(self.mapperctl, "start_mapper", return_value=(42, True)), \
                 mock.patch.object(self.mapperctl, "status", return_value={}), \
                 mock.patch.object(sys, "argv", ["mapperctl.py", "start"]), \
                 contextlib.redirect_stdout(open(os.devnull, "w")):
             self.assertEqual(self.mapperctl.main(), 0)
-        self.assertFalse(self.previous.exists())
-        self.assertIn("mapperctl.py\" start", self.hook.read_text())
+        self.assertFalse(self.prev_70.exists())
+        self.assertFalse(self.prev_50.exists())
+        self.assertIn('mapperctl.sh" start', self.hook.read_text())
         self.assertTrue(os.access(self.hook, os.X_OK))
 
     def test_start_does_not_create_a_missing_hook(self):
@@ -460,7 +589,8 @@ class HookTests(unittest.TestCase):
         self.assertFalse(self.hook.exists())
 
     def test_install_replaces_previous_hook_names(self):
-        self.previous.write_text("old hook\n")
+        self.prev_70.write_text("old 70 hook\n")
+        self.prev_50.write_text("old 50 hook\n")
         self.legacy.write_text("legacy hook\n")
         with mock.patch.object(self.mapperctl, "ensure_state"), \
                 mock.patch.object(self.mapperctl, "atomic_write_json"), \
@@ -468,19 +598,140 @@ class HookTests(unittest.TestCase):
                 mock.patch.object(self.mapperctl, "start_mapper", return_value=(42, True)):
             self.mapperctl.install()
         self.assertTrue(self.hook.exists())
-        self.assertFalse(self.previous.exists())
+        self.assertFalse(self.prev_70.exists())
+        self.assertFalse(self.prev_50.exists())
         self.assertFalse(self.legacy.exists())
 
     def test_remove_deletes_every_hook_name(self):
-        for path in (self.hook, self.previous, self.legacy):
+        for path in (self.hook, self.prev_70, self.prev_50, self.legacy):
             path.write_text("hook\n")
         with mock.patch.object(self.mapperctl, "stop_mapper"):
             self.mapperctl.remove()
-        for path in (self.hook, self.previous, self.legacy):
+        for path in (self.hook, self.prev_70, self.prev_50, self.legacy):
             self.assertFalse(path.exists())
 
     def test_status_counts_an_unmigrated_hook_as_installed(self):
-        self.previous.write_text("old hook\n")
+        self.prev_70.write_text("old hook\n")
         with mock.patch.object(self.mapperctl, "read_pid", return_value=None), \
                 mock.patch.object(self.mapperctl, "process_matches", return_value=False):
             self.assertTrue(self.mapperctl.status()["installed"])
+
+    def test_python_executable_prefers_running_python3_and_skips_python2(self):
+        self.assertEqual(self.mapperctl.python_executable(), sys.executable)
+        with mock.patch.object(sys, "executable", ""), \
+                mock.patch.object(os.path, "isfile", side_effect=lambda path: path == "/opt/bin/python3"), \
+                mock.patch.object(os, "access", side_effect=lambda path, mode: path == "/opt/bin/python3"):
+            self.assertEqual(self.mapperctl.python_executable(), "/opt/bin/python3")
+
+    def test_luna_send_args_matches_webos_major_version(self):
+        with mock.patch.object(self.mapperctl, "get_webos_version", return_value=10):
+            self.assertEqual(self.mapperctl.luna_send_args(), ["/usr/bin/luna-send", "-t", "1"])
+        with mock.patch.object(self.mapperctl, "get_webos_version", return_value=6):
+            self.assertEqual(self.mapperctl.luna_send_args(), ["/usr/bin/luna-send", "-n", "1"])
+
+    def test_trim_log_caps_size_on_line_boundary(self):
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text("".join(f"line {i:04d}\n" for i in range(400)))
+        self.mapperctl.trim_log(max_bytes=512)
+        trimmed = self.log_path.read_text()
+        self.assertLessEqual(len(trimmed.encode("utf-8")), 512)
+        self.assertTrue(trimmed.startswith("line "))
+        self.assertTrue(trimmed.endswith("line 0399\n"))
+
+    def test_last_log_line_ignores_prior_session_lines(self):
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text("Magic Mapper is running\n")
+        offset = os.path.getsize(self.log_path)
+        self.assertEqual(self.mapperctl.last_log_line(since_offset=offset), "")
+        with open(self.log_path, "a") as log_file:
+            log_file.write("RuntimeError: no input device\n")
+        self.assertEqual(
+            self.mapperctl.last_log_line(since_offset=offset),
+            "RuntimeError: no input device",
+        )
+
+
+class LauncherScriptTests(unittest.TestCase):
+    LAUNCHER = os.path.join(ROOT_DIR, "runtime", "mapperctl.sh")
+
+    def make_executable(self, path, content):
+        path.write_text(content)
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return path
+
+    def test_falls_back_to_second_python3_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_python = self.make_executable(root / "old-python", "#!/bin/sh\nexit 1\n")
+            good_python = self.make_executable(
+                root / "opt-python3",
+                f"#!/bin/sh\nexec \"{sys.executable}\" \"$@\"\n",
+            )
+            env = dict(
+                os.environ,
+                MAGIC_MAPPER_PYTHON_PATHS=f"{old_python}:{good_python}",
+                MAGIC_MAPPER_ENTWARE_ROOT=str(root / "missing-helper"),
+                MAGIC_MAPPER_SKIP_PATH="1",
+            )
+            proc = subprocess.run(
+                ["/bin/sh", self.LAUNCHER, "discovery-result", "probe"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["requestId"], "probe")
+
+    def test_falls_back_to_entware_root_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = self.make_executable(
+                root / "webos-entware-root",
+                f"#!/bin/sh\nif [ \"$1\" = \"run\" ] && [ \"$2\" = \"/opt/bin/python3\" ]; then shift 2; exec \"{sys.executable}\" \"$@\"; fi\nexit 1\n",
+            )
+            env = dict(
+                os.environ,
+                MAGIC_MAPPER_PYTHON_PATHS=f"{root / 'missing1'}:{root / 'missing2'}",
+                MAGIC_MAPPER_ENTWARE_ROOT=str(helper),
+                MAGIC_MAPPER_SKIP_PATH="1",
+            )
+            proc = subprocess.run(
+                ["/bin/sh", self.LAUNCHER, "discovery-result", "entware-probe"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["requestId"], "entware-probe")
+
+    def test_reports_missing_python3_as_structured_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(
+                os.environ,
+                MAGIC_MAPPER_PYTHON_PATHS=f"{root / 'missing1'}:{root / 'missing2'}",
+                MAGIC_MAPPER_ENTWARE_ROOT=str(root / "missing-helper"),
+                MAGIC_MAPPER_SKIP_PATH="1",
+            )
+            proc = subprocess.run(
+                ["/bin/sh", self.LAUNCHER, "status"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        payload = json.loads(proc.stdout.strip())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], "missing_python3")
+        self.assertIn("/opt/bin/python3", payload["error"])
+
+
+if __name__ == "__main__":
+    unittest.main()

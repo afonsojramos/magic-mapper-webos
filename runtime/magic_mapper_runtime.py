@@ -6,7 +6,7 @@ import tempfile
 import time
 
 
-RUNTIME_VERSION = "0.3.0"
+RUNTIME_VERSION = "0.4.0"
 ACTION_CATALOG_PATH = os.path.join(os.path.dirname(__file__), "action_catalog.json")
 
 
@@ -135,11 +135,13 @@ def validate_config(config, buttons, functions=None, catalog=None):
 def validate_settings(settings):
     if not isinstance(settings, dict):
         raise ValueError("Settings must be a JSON object")
-    unknown = set(settings) - {"block_mouse"}
+    allowed = {"block_mouse", "ir_input_enabled", "ir_exclusive_mode"}
+    unknown = set(settings) - allowed
     if unknown:
         raise ValueError(f"Unknown setting: {sorted(unknown)[0]}")
-    if "block_mouse" in settings and not isinstance(settings["block_mouse"], bool):
-        raise ValueError("block_mouse must be true or false")
+    for key in allowed:
+        if key in settings and not isinstance(settings[key], bool):
+            raise ValueError(f"{key} must be true or false")
     return settings
 
 

@@ -16,13 +16,14 @@ The upstream mapper stays unmodified and pinned to version 1.1.0.
 - Open any app installed on the TV.
 - Make one remote button behave like another.
 - Adjust OLED light, energy saving, eye comfort, Dynamic Tone Mapping, and screen power.
-- Send IR, HDMI-CEC, TCP, and webhook commands, or toggle PicCap.
+- Send IR, HDMI-CEC, TCP, and webhook commands, toggle PicCap, or toggle Bluetooth.
 - Disable the Magic Remote pointer globally through a guarded, reversible setting.
+- Listen to infrared remote input alongside Bluetooth so mapped buttons keep working when Bluetooth
+  is off.
 - Restore individual buttons or remove Magic Mapper cleanly from the TV.
 
 The supported actions are available through remote-friendly screens with strict input validation and
-one-level-at-a-time Back navigation. Upstream 1.1.0's Bluetooth toggle and optional IR input are not
-exposed by this wrapper yet.
+one-level-at-a-time Back navigation.
 
 ![Magic Mapper action catalogue](assets/screenshots/action-catalog.png)
 
@@ -30,7 +31,10 @@ exposed by this wrapper yet.
 
 - A rooted LG webOS TV.
 - Homebrew Channel running as root.
-- Python 3.7 or newer on the TV.
+- Python 3.7 or newer on the TV, either built in at `/usr/bin/python3` or installed through Entware
+  at `/opt/bin/python3` (including the `webos-entware-root` helper from
+  [WEBOS-ENTWARE-INSTALLER](https://github.com/ohmybahgosh/WEBOS-ENTWARE-INSTALLER) on webOS 4 to
+  6).
 
 The current hardware target is an LG C3 running webOS 25 (internal webOS 10.3.1). Wider hardware
 compatibility has not yet been claimed.
@@ -214,9 +218,10 @@ repository is a placeholder that the release build overwrites.
 ## State and removal
 
 Mappings and runtime state live under `/var/lib/webosbrew/magic-mapper`. The startup hook lives at
-`/var/lib/webosbrew/init.d/70-magic-mapper`. Homebrew runs startup hooks one at a time in name
-order, and this hook waits for the mapper to start, so its name sorts after Luma's `64-luma-home`
-Home takeover. A hook installed under the earlier `50-magic-mapper` name moves to the new name the
+`/var/lib/webosbrew/init.d/z-magic-mapper`. Homebrew runs startup hooks one at a time in name order.
+This hook waits for the mapper and can run through Entware's `/opt/bin/python3`, so its name sorts
+after both Luma's `64-luma-home` Home takeover and Entware's `S99entware` mount script. A hook
+installed under an earlier name (`50-magic-mapper` or `70-magic-mapper`) moves to the new name the
 next time it starts the mapper.
 
 Uninstalling from the app stops the process, releases the exclusive input grab, removes the startup

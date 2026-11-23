@@ -383,6 +383,22 @@
           "max": 2147483647
         }
       ]
+    },
+    {
+      "id": "toggle_bluetooth",
+      "category": "experimental",
+      "title": "Toggle Bluetooth",
+      "summary": "Turn the TV's Bluetooth service on or off.",
+      "editor": "fields",
+      "warning": "Turning Bluetooth off switches the Magic Remote to IR-only mode. Pointer, voice, and Bluetooth-only buttons stop working until Bluetooth is turned back on. Enable IR remote input in Settings if you want mapped buttons to keep working while Bluetooth is off.",
+      "inputs": [
+        {
+          "name": "notifications",
+          "label": "Show confirmation",
+          "type": "boolean",
+          "default": true
+        }
+      ]
     }
   ]
 }

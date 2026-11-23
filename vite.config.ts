@@ -8,6 +8,6 @@ export default defineConfig({
   build: {
     emptyOutDir: true,
     outDir: "build/web",
-    target: "chrome120",
+    target: "chrome68",
   },
 });

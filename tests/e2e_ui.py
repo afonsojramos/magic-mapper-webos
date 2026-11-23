@@ -87,8 +87,15 @@ with sync_playwright() as playwright:
 
     page.get_by_role("button", name="Settings").click()
     assert page.get_by_role("heading", name="Settings").is_visible()
+    page.locator("[data-ir-input]").click()
+    page.locator("[data-ir-input]").get_by_text("On ›", exact=True).wait_for(state="visible", timeout=3000)
     page.get_by_role("button", name="Magic Remote pointer").click()
     assert page.get_by_role("heading", name="Disable the pointer?").is_visible()
+    page.keyboard.press("Escape")
+    assert page.get_by_role("heading", name="Settings").is_visible()
+    page.get_by_role("button", name="View recent log").click()
+    assert page.get_by_role("heading", name="What the mapper sees").is_visible()
+    assert page.locator("pre.log.focusable").is_visible()
     page.keyboard.press("Escape")
     assert page.get_by_role("heading", name="Settings").is_visible()
     assert page.get_by_text("Uninstall Magic Mapper", exact=True).is_visible()
@@ -102,7 +109,12 @@ with sync_playwright() as playwright:
         this.call = () => setTimeout(() => this.onservicecallback(JSON.stringify({
           returnValue: true,
           stdoutString: JSON.stringify({ok: true, status: {
-            active: true, installed: true, config: {netflix: "disabled"}
+            active: true, installed: true, config: {
+              netflix: [
+                {function: "launch_app", inputs: {app_id: "cdp-30", app_title: "Plex"}, appId: "youtube.leanback.v4"},
+                {function: "screen_off", inputs: {}, appId: "!"}
+              ]
+            }
           }}),
           stderrString: ""
         })), 0);
@@ -112,6 +124,59 @@ with sync_playwright() as playwright:
     bridge_page.wait_for_load_state("networkidle")
     assert bridge_page.get_by_text("Running", exact=True).is_visible()
     assert bridge_page.locator(".mapping-row").count() == 1
+    bridge_page.locator("[data-edit='netflix']").click()
+    assert bridge_page.get_by_text("Custom configuration", exact=True).is_visible()
+    assert bridge_page.locator(".mapping-breakdown li").count() == 2
+
+    missing_py_page = browser.new_page(viewport={"width": 1920, "height": 1080})
+    missing_py_page.add_init_script("""
+      window.__calls = 0;
+      window.PalmServiceBridge = function () {
+        this.call = () => {
+          window.__calls += 1;
+          const fail = window.__calls <= 2;
+          setTimeout(() => this.onservicecallback(JSON.stringify(fail ? {
+            returnValue: false,
+            error: "Command failed",
+            stdoutString: JSON.stringify({
+              ok: false,
+              code: "missing_python3",
+              error: "Python 3.7 or newer was not found on this TV."
+            }),
+            stderrString: ""
+          } : {
+            returnValue: true,
+            stdoutString: JSON.stringify({
+              ok: true,
+              status: {active: true, installed: true, config: {netflix: "disabled"}}
+            }),
+            stderrString: ""
+          })), 0);
+        };
+      };
+    """)
+    missing_py_page.goto("http://127.0.0.1:8765/index.html")
+    missing_py_page.wait_for_load_state("networkidle")
+    assert missing_py_page.get_by_text("Python 3 is required", exact=True).is_visible()
+    assert missing_py_page.get_by_text("Unavailable", exact=True).is_visible()
+    missing_py_page.locator("#retry-button").click()
+    missing_py_page.wait_for_selector(".mapping-row", timeout=3000)
+    assert missing_py_page.get_by_text("Running", exact=True).is_visible()
+
+    fallback_error_page = browser.new_page(viewport={"width": 1920, "height": 1080})
+    fallback_error_page.add_init_script("""
+      window.PalmServiceBridge = function () {
+        this.call = () => setTimeout(() => this.onservicecallback(JSON.stringify({
+          returnValue: false,
+          error: "Homebrew service denied root exec",
+          stdoutString: "0\\n",
+          stderrString: ""
+        })), 0);
+      };
+    """)
+    fallback_error_page.goto("http://127.0.0.1:8765/index.html")
+    fallback_error_page.wait_for_load_state("networkidle")
+    assert fallback_error_page.get_by_text("Homebrew service denied root exec", exact=True).is_visible()
     browser.close()
 
 print(SCREENSHOT)

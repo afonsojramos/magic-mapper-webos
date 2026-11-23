@@ -12,30 +12,65 @@ declare global {
       call(uri: string, parameters: string): void;
       onservicecallback(raw: string): void;
     };
+    magicMapperBooted?: boolean;
+    magicMapperFatal?: (message: string) => void;
+  }
+}
+
+export class ControllerError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "ControllerError";
+    this.code = code;
   }
 }
 
 const APP_DIR = "/media/developer/apps/usr/palm/applications/com.github.afonsojramos.magicmapper";
-const CONTROLLER = `/usr/bin/python3 ${APP_DIR}/runtime/mapperctl.py`;
+const CONTROLLER = `/bin/sh ${APP_DIR}/runtime/mapperctl.sh`;
+
+function firstErrorText(response: Record<string, unknown>): string {
+  for (const candidate of [
+    response.stderrString,
+    response.stderr,
+    response.errorText,
+    response.error,
+  ]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return "Magic Mapper did not return a response";
+}
 
 function parseControllerOutput<T>(response: Record<string, unknown>): T {
   const stdout = response.stdoutString ?? response.stdout ?? response.output ?? "";
-  if (typeof stdout !== "string") return response as T;
-  const lines = stdout.trim().split("\n");
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      return JSON.parse(lines[index]) as T;
-    } catch {
-      // The Homebrew service may prefix controller output; read the last JSON line.
+  if (typeof stdout === "string") {
+    const lines = stdout.trim().split("\n");
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const parsed: unknown = JSON.parse(lines[index]);
+        if (
+          parsed !== null &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed) &&
+          typeof (parsed as Record<string, unknown>).ok === "boolean"
+        ) {
+          return parsed as T;
+        }
+      } catch {
+        // The Homebrew service may prefix controller output; read the last JSON line.
+      }
     }
+  } else if (response.returnValue !== false) {
+    return response as T;
   }
-  const stderr = response.stderrString ?? response.stderr;
-  throw new Error(typeof stderr === "string" ? stderr : "Magic Mapper did not return a response");
+  throw new ControllerError(firstErrorText(response));
 }
 
 function lunaCall(
   uri: string,
   parameters: Record<string, unknown>,
+  allowErrorPayload = false,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     if (!window.PalmServiceBridge) {
@@ -53,7 +88,7 @@ function lunaCall(
       window.clearTimeout(timeout);
       try {
         const response = JSON.parse(raw) as Record<string, unknown>;
-        if (response.returnValue === false) {
+        if (response.returnValue === false && !allowErrorPayload) {
           reject(
             new Error(
               typeof response.errorText === "string"
@@ -74,15 +109,17 @@ function lunaCall(
 
 function run<T extends { ok: boolean }>(command: string, value?: string): Promise<T> {
   const fullCommand = `${CONTROLLER} ${command}${value ? ` ${value}` : ""}`;
-  return lunaCall("luna://org.webosbrew.hbchannel.service/exec", { command: fullCommand })
+  return lunaCall("luna://org.webosbrew.hbchannel.service/exec", { command: fullCommand }, true)
     .then(parseControllerOutput<T>)
     .then((response) => {
       if (!response.ok) {
         const message =
-          "error" in response && typeof response.error === "string"
+          "error" in response && typeof response.error === "string" && response.error.trim()
             ? response.error
             : "Magic Mapper command failed";
-        throw new Error(message);
+        const code =
+          "code" in response && typeof response.code === "string" ? response.code : undefined;
+        throw new ControllerError(message, code);
       }
       return response;
     });
@@ -108,13 +145,24 @@ function mockPlatform(): Platform {
       };
   let active = true;
   let installed = true;
-  let settings: MapperSettings = { block_mouse: false };
+  let settings: MapperSettings = {
+    block_mouse: false,
+    ir_exclusive_mode: true,
+    ir_input_enabled: false,
+  };
   const discoveries = ["rakuten", "disney", "netflix"];
 
   const status = (): Promise<StatusResponse> =>
     Promise.resolve({
       ok: true,
-      status: { active, installed, config, settings, configDigest: "demo12345678" },
+      status: {
+        active,
+        config,
+        configDigest: "demo12345678",
+        installed,
+        irInputDevice: settings.ir_input_enabled ? "/dev/input/event1" : null,
+        settings,
+      },
     });
 
   return {
@@ -161,7 +209,7 @@ function mockPlatform(): Platform {
       }),
     capabilities: () => Promise.resolve({ capabilities: { piccap: true } }),
     configureSettings: (nextSettings) => {
-      settings = nextSettings;
+      settings = { ...settings, ...nextSettings };
       return status();
     },
     logs: () =>

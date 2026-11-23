@@ -9,4 +9,9 @@ const root = document.getElementById("root");
 
 if (!root) throw new Error("Magic Mapper could not find its application root");
 
-render(() => <App />, root);
+try {
+  render(() => <App />, root);
+} catch (error) {
+  window.magicMapperFatal?.(error instanceof Error ? error.message : String(error));
+  throw error;
+}
