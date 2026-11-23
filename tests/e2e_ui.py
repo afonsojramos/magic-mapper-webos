@@ -135,11 +135,21 @@ with sync_playwright() as playwright:
         this.call = () => {
           window.__calls += 1;
           const fail = window.__calls <= 2;
-          setTimeout(() => this.onservicecallback(JSON.stringify({
+          setTimeout(() => this.onservicecallback(JSON.stringify(fail ? {
+            returnValue: false,
+            error: "Command failed",
+            stdoutString: JSON.stringify({
+              ok: false,
+              code: "missing_python3",
+              error: "Python 3.7 or newer was not found on this TV."
+            }),
+            stderrString: ""
+          } : {
             returnValue: true,
-            stdoutString: JSON.stringify(fail
-              ? {ok: false, code: "missing_python3", error: "Python 3.7 or newer was not found on this TV."}
-              : {ok: true, status: {active: true, installed: true, config: {netflix: "disabled"}}}),
+            stdoutString: JSON.stringify({
+              ok: true,
+              status: {active: true, installed: true, config: {netflix: "disabled"}}
+            }),
             stderrString: ""
           })), 0);
         };

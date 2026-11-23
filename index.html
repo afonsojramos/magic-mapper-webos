@@ -7,6 +7,68 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (function () {
+        if (typeof window.globalThis === "undefined") {
+          window.globalThis = window;
+        }
+        if (typeof window.queueMicrotask !== "function") {
+          window.queueMicrotask = function (callback) {
+            Promise.resolve()
+              .then(callback)
+              .catch(function (error) {
+                window.setTimeout(function () {
+                  throw error;
+                }, 0);
+              });
+          };
+        }
+        if (typeof Object.fromEntries !== "function") {
+          Object.fromEntries = function (entries) {
+            var result = {};
+            for (var i = 0; i < entries.length; i += 1) {
+              var pair = entries[i];
+              result[pair[0]] = pair[1];
+            }
+            return result;
+          };
+        }
+
+        function showBootError(message) {
+          if (window.magicMapperBooted) return;
+          var root = document.getElementById("root");
+          if (!root) return;
+          root.textContent = "";
+          var box = document.createElement("div");
+          box.style.cssText =
+            "padding:5rem 6rem;color:#f6f6f3;background:#0b0e0d;font-family:sans-serif;height:100%;box-sizing:border-box;";
+          var heading = document.createElement("h1");
+          heading.textContent = "Magic Mapper could not start";
+          heading.style.cssText = "margin:0 0 1rem;font-size:2.6rem;";
+          var detail = document.createElement("p");
+          detail.textContent = String(message || "Unexpected startup error");
+          detail.style.cssText = "margin:0;color:#a8adaa;font-size:1.2rem;line-height:1.5;";
+          box.appendChild(heading);
+          box.appendChild(detail);
+          root.appendChild(box);
+        }
+
+        window.magicMapperFatal = showBootError;
+        window.addEventListener("error", function (event) {
+          showBootError(
+            (event && event.error && event.error.message) ||
+              (event && event.message) ||
+              "Unexpected startup error",
+          );
+        });
+        window.addEventListener("unhandledrejection", function (event) {
+          var reason = event && event.reason;
+          showBootError(
+            (reason && reason.message) || String(reason || "Unexpected startup rejection"),
+          );
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

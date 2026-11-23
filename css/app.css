@@ -247,21 +247,6 @@ h1 {
   flex: 0 0 auto;
 }
 
-.fatal-fallback {
-  padding: 5rem 6rem;
-}
-
-.fatal-fallback h1 {
-  margin-bottom: 1rem;
-  font-size: 2.6rem;
-}
-
-.fatal-fallback p {
-  color: var(--muted);
-  font-size: 1.2rem;
-  line-height: 1.5;
-}
-
 .mappings-section {
   padding-top: 1.3rem;
 }
@@ -389,6 +374,7 @@ footer {
   margin: 0;
   border: 0;
   padding: 5rem 4.5rem;
+  color: var(--ink);
   background: #151918;
   box-shadow: -2rem 0 5rem rgba(0, 0, 0, 0.45);
 }
@@ -654,10 +640,18 @@ textarea.text-control {
 }
 
 .mapping-breakdown {
+  max-height: 12rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   margin: 1rem 0 0;
   padding: 0;
   list-style: none;
   border-top: 1px solid var(--line);
+  scrollbar-width: none;
+}
+
+.mapping-breakdown::-webkit-scrollbar {
+  display: none;
 }
 
 .mapping-breakdown li {
@@ -745,5 +739,42 @@ textarea.text-control {
   *::after {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* Fallback flex spacing for webOS 5/6 (Chromium 68/79) where flex gap is unsupported. */
+@supports not (gap: 1rem) {
+  .wordmark > * + * {
+    margin-left: 1rem;
+  }
+  .topbar-actions > * + * {
+    margin-left: 2rem;
+  }
+  .status-line > * + * {
+    margin-left: 0.75rem;
+  }
+  .primary > * + * {
+    margin-left: 0.75rem;
+  }
+  .error-banner > * + * {
+    margin-left: 2rem;
+  }
+  .empty-state > * + * {
+    margin-left: 1.4rem;
+  }
+  footer > * + * {
+    margin-left: 2.2rem;
+  }
+  .choice > * + * {
+    margin-left: 1.5rem;
+  }
+  .choice-meta > * + * {
+    margin-left: 0.85rem;
+  }
+  .mapping-breakdown li > * + * {
+    margin-left: 1rem;
+  }
+  .modal-actions > * + * {
+    margin-left: 1rem;
   }
 }

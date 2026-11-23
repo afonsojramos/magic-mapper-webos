@@ -12,20 +12,25 @@ is_python37() {
 }
 
 CANDIDATES="${MAGIC_MAPPER_PYTHON_PATHS:-/usr/bin/python3:/opt/bin/python3}"
-OLD_IFS=$IFS
+if [ "${IFS+set}" = "set" ]; then
+  OLD_IFS=$IFS
+  HAD_IFS=1
+else
+  HAD_IFS=0
+fi
 IFS=:
 for candidate in $CANDIDATES; do
   [ -n "$candidate" ] || continue
   if [ -f "$candidate" ] && [ -x "$candidate" ] && is_python37 "$candidate"; then
-    IFS=$OLD_IFS
+    if [ "$HAD_IFS" = "1" ]; then IFS=$OLD_IFS; else unset IFS; fi
     exec "$candidate" "$CONTROLLER" "$@"
   fi
 done
-IFS=$OLD_IFS
+if [ "$HAD_IFS" = "1" ]; then IFS=$OLD_IFS; else unset IFS; fi
 
 if [ "${MAGIC_MAPPER_SKIP_PATH:-0}" != "1" ]; then
   PATH_PYTHON=$(command -v python3 2>/dev/null || true)
-  if [ -n "$PATH_PYTHON" ] && [ -x "$PATH_PYTHON" ] && is_python37 "$PATH_PYTHON"; then
+  if [ -n "$PATH_PYTHON" ] && [ -f "$PATH_PYTHON" ] && [ -x "$PATH_PYTHON" ] && is_python37 "$PATH_PYTHON"; then
     exec "$PATH_PYTHON" "$CONTROLLER" "$@"
   fi
 fi

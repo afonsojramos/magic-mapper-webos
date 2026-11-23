@@ -133,9 +133,17 @@ def actions_for_app(actions):
         elif current_app is not None and app_id == current_app:
             filtered.append(action)
             found_match = True
-        elif app_id == "!" and not found_match:
+        elif current_app is not None and app_id == "!" and not found_match:
             filtered.append(action)
     return filtered
+
+
+def _close_source(source):
+    if source["grabbed"]:
+        with contextlib.suppress(OSError):
+            fcntl.ioctl(source["reader"], upstream.EVIOCGRAB, 0)
+    with contextlib.suppress(OSError):
+        source["reader"].close()
 
 
 def _open_source(device_name, grab, required=False):
@@ -163,7 +171,13 @@ def _open_source(device_name, grab, required=False):
                 reader.close()
                 raise
             print(f"WARNING: could not grab input device '{device_name}' ({device_path}): {error}")
-    return {"name": device_name, "path": device_path, "reader": reader, "grabbed": grabbed}
+    return {
+        "name": device_name,
+        "path": device_path,
+        "reader": reader,
+        "grabbed": grabbed,
+        "required": required,
+    }
 
 
 def input_loop(button_map):
@@ -176,25 +190,27 @@ def input_loop(button_map):
         os.path.join(STATE_DIR, "discover-result.json"),
     )
 
-    primary = _open_source(upstream.INPUT_DEVICE_NAME, upstream.EXCLUSIVE_MODE, required=True)
-    input_device_path = primary["path"]
-    sources = {primary["reader"]: primary}
+    sources = {}
+    input_device_path = None
     ir_input_device_path = None
-    if upstream.IR_INPUT_ENABLED:
-        if upstream.IR_INPUT_DEVICE_NAME == upstream.INPUT_DEVICE_NAME:
-            print("IR input device matches primary input device, not opening twice")
-        else:
-            ir_source = _open_source(
-                upstream.IR_INPUT_DEVICE_NAME, upstream.IR_EXCLUSIVE_MODE, required=False
-            )
-            if ir_source:
-                sources[ir_source["reader"]] = ir_source
-                ir_input_device_path = ir_source["path"]
-
     output_device_path = None
     output_device = None
 
     try:
+        primary = _open_source(upstream.INPUT_DEVICE_NAME, upstream.EXCLUSIVE_MODE, required=True)
+        input_device_path = primary["path"]
+        sources[primary["reader"]] = primary
+        if upstream.IR_INPUT_ENABLED:
+            if upstream.IR_INPUT_DEVICE_NAME == upstream.INPUT_DEVICE_NAME:
+                print("IR input device matches primary input device, not opening twice")
+            else:
+                ir_source = _open_source(
+                    upstream.IR_INPUT_DEVICE_NAME, upstream.IR_EXCLUSIVE_MODE, required=False
+                )
+                if ir_source:
+                    sources[ir_source["reader"]] = ir_source
+                    ir_input_device_path = ir_source["path"]
+
         if any(source["grabbed"] for source in sources.values()):
             print("Exclusive mode is enabled, taking over input device(s)")
             output_device_path = upstream.resolve_output_device()
@@ -216,7 +232,7 @@ def input_loop(button_map):
         print("Magic Mapper is running")
         last_status = 0
 
-        while not STOP_REQUESTED:
+        while not STOP_REQUESTED and sources:
             now = time.time()
             discovery.poll(pressed_codes, now)
             if now - last_status >= 2:
@@ -237,9 +253,38 @@ def input_loop(button_map):
             del unused_write, unused_error
             if not readable:
                 continue
+            lost_primary = False
             for reader in readable:
-                source = sources[reader]
-                event = reader.read(event_size)
+                source = sources.get(reader)
+                if not source:
+                    continue
+                try:
+                    event = reader.read(event_size)
+                except OSError as error:
+                    print(f"WARNING: could not read input device '{source['name']}': {error}")
+                    event = b""
+                if not event:
+                    if source["required"]:
+                        print(f"ERROR: lost primary input device '{source['name']}', exiting")
+                        lost_primary = True
+                        break
+                    print(f"WARNING: lost optional input device '{source['name']}', detaching it")
+                    _close_source(source)
+                    sources.pop(reader, None)
+                    if source["path"] == ir_input_device_path:
+                        ir_input_device_path = None
+                    for key in [k for k in buttons_waiting if k[0] == source["name"]]:
+                        buttons_waiting.pop(key, None)
+                    pressed_codes = {k for k in pressed_codes if k[0] != source["name"]}
+                    write_status(
+                        True,
+                        button_map,
+                        input_device_path,
+                        output_device_path,
+                        discovery,
+                        ir_input_device=ir_input_device_path,
+                    )
+                    continue
                 if len(event) != event_size:
                     continue
                 unused_sec, unused_usec, event_type, code, value = struct.unpack(input_format, event)
@@ -252,9 +297,9 @@ def input_loop(button_map):
                     key = upstream.BUTTONS.get(code)
                     if discovery.handle_key(code, value, key, pressed_codes, now):
                         if value == 1:
-                            pressed_codes.add(code)
+                            pressed_codes.add(wait_key)
                         elif value == 0:
-                            pressed_codes.discard(code)
+                            pressed_codes.discard(wait_key)
                         write_status(
                             True,
                             button_map,
@@ -265,9 +310,9 @@ def input_loop(button_map):
                         )
                         continue
                     if value == 1:
-                        pressed_codes.add(code)
+                        pressed_codes.add(wait_key)
                     elif value == 0:
-                        pressed_codes.discard(code)
+                        pressed_codes.discard(wait_key)
                     discovery.poll(pressed_codes, now)
                 elif event_type == 2:
                     code = value
@@ -321,15 +366,14 @@ def input_loop(button_map):
                             print(f"ERROR: action for button {key} failed")
                             traceback.print_exc()
                     buttons_waiting.pop(wait_key, None)
+            if lost_primary:
+                break
     finally:
-        for source in sources.values():
-            if source["grabbed"]:
-                with contextlib.suppress(OSError):
-                    fcntl.ioctl(source["reader"], upstream.EVIOCGRAB, 0)
-            with contextlib.suppress(OSError):
-                source["reader"].close()
+        for source in list(sources.values()):
+            _close_source(source)
         if output_device is not None:
-            os.close(output_device)
+            with contextlib.suppress(OSError):
+                os.close(output_device)
         write_status(
             False,
             button_map,

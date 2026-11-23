@@ -126,11 +126,11 @@ function describe(mapping: Mapping | undefined): string {
 }
 
 function defaultInputs(action: ActionDefinition): EditorValues {
-  return Object.fromEntries(
-    action.inputs
-      .filter((field) => field.default !== undefined)
-      .map((field) => [field.name, field.default]),
-  );
+  const values: EditorValues = {};
+  for (const field of action.inputs) {
+    if (field.default !== undefined) values[field.name] = field.default;
+  }
+  return values;
 }
 
 function errorMessage(error: unknown): string {
@@ -329,6 +329,7 @@ export default function App(): JSX.Element {
         const response = await platform.install();
         setStatus(response.status);
         showToast(response.migrated ? "Existing mappings imported" : "Magic Mapper is active");
+        if (response.status.active) window.setTimeout(() => discoverButton?.focus(), 0);
       } catch (error) {
         showError(error);
       } finally {
@@ -337,9 +338,10 @@ export default function App(): JSX.Element {
     } else if (!status().active) {
       setBusy(true);
       try {
-        await platform.start();
-        await refresh();
+        const response = await platform.start();
+        setStatus(response.status);
         showToast("Mapper started");
+        if (response.status.active) window.setTimeout(() => discoverButton?.focus(), 0);
       } catch (error) {
         showError(error);
       } finally {
@@ -870,6 +872,7 @@ export default function App(): JSX.Element {
     const active = () => status().active;
     const blockMouse = () => Boolean(status().settings?.block_mouse);
     const irEnabled = () => Boolean(status().settings?.ir_input_enabled);
+    const irMissing = () => irEnabled() && active() && status().irInputDevice === null;
     return (
       <>
         <p class="eyebrow">MAGIC MAPPER</p>
@@ -891,9 +894,13 @@ export default function App(): JSX.Element {
           >
             <span>
               <strong>IR remote input</strong>
-              <small>Also read infrared presses, including when Bluetooth is off</small>
+              <small>
+                {irMissing()
+                  ? "No IR receiver detected on this TV"
+                  : "Also read infrared presses, including when Bluetooth is off"}
+              </small>
             </span>
-            <span>{irEnabled() ? "On" : "Off"} ›</span>
+            <span>{irEnabled() ? (irMissing() ? "Unavailable" : "On") : "Off"} ›</span>
           </button>
           <button class="service-row focusable" type="button" onClick={() => void toggleService()}>
             <span>{active() ? "Stop mapper" : "Start mapper"}</span>
@@ -999,7 +1006,13 @@ export default function App(): JSX.Element {
     try {
       const response = await platform.configureSettings(settings);
       setStatus(response.status);
-      showToast(nextEnabled ? "IR remote input enabled" : "IR remote input disabled");
+      showToast(
+        nextEnabled
+          ? response.status.active && response.status.irInputDevice === null
+            ? "IR remote input enabled (no IR receiver found)"
+            : "IR remote input enabled"
+          : "IR remote input disabled",
+      );
     } catch (error) {
       showError(error);
     } finally {
@@ -1181,6 +1194,7 @@ export default function App(): JSX.Element {
       platform.capabilities().catch(() => ({ capabilities: { piccap: false } })),
     ])
       .then(([statusResponse, capabilityResponse]) => {
+        window.magicMapperBooted = true;
         setStatus(statusResponse.status);
         setCapabilities(capabilityResponse.capabilities ?? {});
         setReady(true);
@@ -1194,6 +1208,7 @@ export default function App(): JSX.Element {
         );
       })
       .catch((error: unknown) => {
+        window.magicMapperBooted = true;
         const code = error instanceof ControllerError ? error.code : undefined;
         setStartupError({ code, message: errorMessage(error) });
         window.setTimeout(() => document.querySelector<HTMLElement>("#retry-button")?.focus(), 0);
@@ -1231,7 +1246,7 @@ export default function App(): JSX.Element {
               class="icon-button focusable"
               type="button"
               aria-label="Settings"
-              disabled={Boolean(startupError())}
+              disabled={!ready() || Boolean(startupError())}
               onClick={showSystem}
             >
               <span aria-hidden="true">⚙</span>

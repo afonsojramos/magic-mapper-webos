@@ -12,6 +12,8 @@ declare global {
       call(uri: string, parameters: string): void;
       onservicecallback(raw: string): void;
     };
+    magicMapperBooted?: boolean;
+    magicMapperFatal?: (message: string) => void;
   }
 }
 
@@ -30,23 +32,31 @@ const CONTROLLER = `/bin/sh ${APP_DIR}/runtime/mapperctl.sh`;
 
 function parseControllerOutput<T>(response: Record<string, unknown>): T {
   const stdout = response.stdoutString ?? response.stdout ?? response.output ?? "";
-  if (typeof stdout !== "string") return response as T;
-  const lines = stdout.trim().split("\n");
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      return JSON.parse(lines[index]) as T;
-    } catch {
-      // The Homebrew service may prefix controller output; read the last JSON line.
+  if (typeof stdout === "string") {
+    const lines = stdout.trim().split("\n");
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        return JSON.parse(lines[index]) as T;
+      } catch {
+        // The Homebrew service may prefix controller output; read the last JSON line.
+      }
     }
+  } else if (response.returnValue !== false) {
+    return response as T;
   }
-  const stderr = response.stderrString ?? response.stderr;
-  const trimmedStderr = typeof stderr === "string" ? stderr.trim() : "";
-  throw new ControllerError(trimmedStderr || "Magic Mapper did not return a response");
+  const fallback =
+    response.stderrString ??
+    response.stderr ??
+    response.errorText ??
+    (typeof response.error === "string" ? response.error : undefined);
+  const trimmed = typeof fallback === "string" ? fallback.trim() : "";
+  throw new ControllerError(trimmed || "Magic Mapper did not return a response");
 }
 
 function lunaCall(
   uri: string,
   parameters: Record<string, unknown>,
+  allowErrorPayload = false,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     if (!window.PalmServiceBridge) {
@@ -64,7 +74,7 @@ function lunaCall(
       window.clearTimeout(timeout);
       try {
         const response = JSON.parse(raw) as Record<string, unknown>;
-        if (response.returnValue === false) {
+        if (response.returnValue === false && !allowErrorPayload) {
           reject(
             new Error(
               typeof response.errorText === "string"
@@ -85,7 +95,7 @@ function lunaCall(
 
 function run<T extends { ok: boolean }>(command: string, value?: string): Promise<T> {
   const fullCommand = `${CONTROLLER} ${command}${value ? ` ${value}` : ""}`;
-  return lunaCall("luna://org.webosbrew.hbchannel.service/exec", { command: fullCommand })
+  return lunaCall("luna://org.webosbrew.hbchannel.service/exec", { command: fullCommand }, true)
     .then(parseControllerOutput<T>)
     .then((response) => {
       if (!response.ok) {
@@ -131,7 +141,14 @@ function mockPlatform(): Platform {
   const status = (): Promise<StatusResponse> =>
     Promise.resolve({
       ok: true,
-      status: { active, installed, config, settings, configDigest: "demo12345678" },
+      status: {
+        active,
+        config,
+        configDigest: "demo12345678",
+        installed,
+        irInputDevice: settings.ir_input_enabled ? "/dev/input/event1" : null,
+        settings,
+      },
     });
 
   return {

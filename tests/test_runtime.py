@@ -307,10 +307,76 @@ class UpstreamCompatibilityTests(unittest.TestCase):
         actions = [
             {"function": "screen_off", "inputs": {}},
             {"function": "disabled", "inputs": {}, "appId": "cdp-30"},
+            {"function": "toggle_piccap", "inputs": {}, "appId": "!"},
         ]
         with mock.patch.object(managed_mapper.upstream, "luna_send", side_effect=OSError("boom")):
             filtered = managed_mapper.actions_for_app(actions)
         self.assertEqual(filtered, [{"function": "screen_off", "inputs": {}}])
+
+    def test_optional_ir_eof_detaches_without_stopping_primary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bt_path = os.path.join(directory, "bt")
+            ir_path = os.path.join(directory, "ir")
+            output_path = os.path.join(directory, "output")
+            bt_events = self.back_events()
+            Path(bt_path).write_bytes(bt_events)
+            Path(ir_path).write_bytes(b"")
+            Path(output_path).touch()
+            device_paths = [
+                ("LGE M-RCU - Builtin [0]", bt_path),
+                ("LGE RCU", ir_path),
+                ("LGE M-RCU - Builtin [1]", output_path),
+            ]
+            action = {"function": "screen_off", "inputs": {}}
+            step = {"count": 0}
+
+            def readable(readers, writers, errors, timeout):
+                del writers, errors, timeout
+                step["count"] += 1
+                if step["count"] == 1:
+                    ir_reader = next(reader for reader in readers if reader.name == ir_path)
+                    return [ir_reader], [], []
+                bt_reader = next(reader for reader in readers if reader.name == bt_path)
+                if bt_reader.tell() == len(bt_events):
+                    managed_mapper.STOP_REQUESTED = True
+                    return [], [], []
+                return [bt_reader], [], []
+
+            with mock.patch.multiple(managed_mapper, STATE_DIR=directory, APP_DIR=directory, STOP_REQUESTED=False), \
+                    mock.patch.multiple(
+                        managed_mapper.upstream,
+                        WEBOS_MAJOR_VERSION=10,
+                        EXCLUSIVE_MODE=True,
+                        IR_INPUT_ENABLED=True,
+                        IR_EXCLUSIVE_MODE=True,
+                    ), \
+                    mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=device_paths), \
+                    mock.patch.object(managed_mapper.fcntl, "ioctl"), \
+                    mock.patch.object(managed_mapper.select, "select", side_effect=readable), \
+                    mock.patch.object(managed_mapper.upstream, "fire_events") as fire_events:
+                managed_mapper.input_loop({"back": action})
+                status = json.loads(Path(directory, "status.json").read_text())
+            self.assertIsNone(status["irInputDevice"])
+            self.assertEqual(fire_events.call_args_list, [mock.call([action])])
+
+    def test_primary_eof_exits_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bt_path = os.path.join(directory, "bt")
+            output_path = os.path.join(directory, "output")
+            Path(bt_path).write_bytes(b"")
+            Path(output_path).touch()
+            device_paths = [
+                ("LGE M-RCU - Builtin [0]", bt_path),
+                ("LGE M-RCU - Builtin [1]", output_path),
+            ]
+            with mock.patch.multiple(managed_mapper, STATE_DIR=directory, APP_DIR=directory, STOP_REQUESTED=False), \
+                    mock.patch.multiple(managed_mapper.upstream, WEBOS_MAJOR_VERSION=10, EXCLUSIVE_MODE=True, IR_INPUT_ENABLED=False), \
+                    mock.patch.object(managed_mapper.upstream, "read_input_devices", return_value=device_paths), \
+                    mock.patch.object(managed_mapper.fcntl, "ioctl"), \
+                    mock.patch.object(managed_mapper.select, "select", side_effect=lambda r, w, e, t: (r, [], [])):
+                managed_mapper.input_loop({})
+                status = json.loads(Path(directory, "status.json").read_text())
+            self.assertFalse(status["active"])
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -571,6 +637,18 @@ class HookTests(unittest.TestCase):
         self.assertLessEqual(len(trimmed.encode("utf-8")), 512)
         self.assertTrue(trimmed.startswith("line "))
         self.assertTrue(trimmed.endswith("line 0399\n"))
+
+    def test_last_log_line_ignores_prior_session_lines(self):
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text("Magic Mapper is running\n")
+        offset = os.path.getsize(self.log_path)
+        self.assertEqual(self.mapperctl.last_log_line(since_offset=offset), "")
+        with open(self.log_path, "a") as log_file:
+            log_file.write("RuntimeError: no input device\n")
+        self.assertEqual(
+            self.mapperctl.last_log_line(since_offset=offset),
+            "RuntimeError: no input device",
+        )
 
 
 class LauncherScriptTests(unittest.TestCase):

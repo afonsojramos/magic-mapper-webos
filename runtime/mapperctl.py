@@ -168,8 +168,19 @@ def trim_log(max_bytes=MAX_LOG_BYTES):
         pass
 
 
-def last_log_line():
-    lines = [line.strip() for line in tail_log().splitlines() if line.strip()]
+def last_log_line(since_offset=0):
+    try:
+        with open(LOG_PATH, "rb") as log_file:
+            log_file.seek(0, os.SEEK_END)
+            size = log_file.tell()
+            start = max(since_offset, size - 12000)
+            if start >= size:
+                return ""
+            log_file.seek(start)
+            text = log_file.read().decode("utf-8", "replace")
+    except (IOError, OSError):
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[-1] if lines else ""
 
 
@@ -183,6 +194,10 @@ def start_mapper():
     validate_config(config, BUTTONS, valid_functions())
     settings = load_settings()
     trim_log()
+    try:
+        log_offset = os.path.getsize(LOG_PATH)
+    except OSError:
+        log_offset = 0
     command = [
         python_executable(), "-u", os.path.join(APP_DIR, "runtime", "managed_mapper.py"),
         "--config", CONFIG_PATH,
@@ -202,7 +217,7 @@ def start_mapper():
     deadline = time.time() + 8
     while time.time() < deadline:
         if process.poll() is not None:
-            detail = last_log_line()
+            detail = last_log_line(log_offset)
             message = "Magic Mapper exited during startup"
             raise RuntimeError("%s: %s" % (message, detail) if detail else "%s; check the log" % message)
         try:
@@ -215,7 +230,7 @@ def start_mapper():
         time.sleep(0.1)
     else:
         stop_mapper()
-        detail = last_log_line()
+        detail = last_log_line(log_offset)
         message = "Magic Mapper did not become active"
         raise RuntimeError("%s: %s" % (message, detail) if detail else "%s; check the log" % message)
     return process.pid, True
