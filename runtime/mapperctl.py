@@ -15,7 +15,7 @@ VENDOR_DIR = os.path.join(APP_DIR, "vendor")
 if VENDOR_DIR not in sys.path:
     sys.path.insert(0, VENDOR_DIR)
 
-from magic_mapper import BUTTONS
+from magic_mapper import BUTTONS, get_webos_version
 from magic_mapper_runtime import (
     atomic_write_json,
     config_digest,
@@ -32,12 +32,22 @@ SETTINGS_PATH = os.path.join(STATE_DIR, "settings.json")
 PID_PATH = os.path.join(STATE_DIR, "magic-mapper.pid")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 LOG_PATH = os.path.join(STATE_DIR, "magic-mapper.log")
-# Homebrew runs init.d hooks one at a time in name order. This hook waits for the mapper, so it
-# sorts after Luma's 64-luma-home Home takeover.
-HOOK_PATH = "/var/lib/webosbrew/init.d/70-magic-mapper"
-PREVIOUS_HOOK = "/var/lib/webosbrew/init.d/50-magic-mapper"
+MAX_LOG_BYTES = 65536
+# Homebrew runs init.d hooks one at a time in name order. This hook waits for the mapper and may
+# use Entware's /opt/bin/python3, so it sorts after both Luma's 64-luma-home and Entware's
+# S99entware.
+HOOK_PATH = "/var/lib/webosbrew/init.d/z-magic-mapper"
+PREVIOUS_HOOKS = (
+    "/var/lib/webosbrew/init.d/70-magic-mapper",
+    "/var/lib/webosbrew/init.d/50-magic-mapper",
+)
 LEGACY_CONFIG = "/home/root/magic_mapper_config.json"
 LEGACY_HOOK = "/var/lib/webosbrew/init.d/start_magic_mapper"
+DEFAULT_SETTINGS = {
+    "block_mouse": False,
+    "ir_input_enabled": False,
+    "ir_exclusive_mode": True,
+}
 
 
 def result(ok=True, **values):
@@ -51,10 +61,19 @@ def ensure_state():
 
 
 def python_executable():
-    for candidate in ("/usr/bin/python3", "/usr/bin/python"):
-        if os.path.isfile(candidate):
+    if (
+        sys.version_info >= (3, 7)
+        and sys.executable
+        and os.path.isfile(sys.executable)
+        and os.access(sys.executable, os.X_OK)
+    ):
+        return sys.executable
+    for candidate in ("/usr/bin/python3", "/opt/bin/python3"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    return sys.executable
+    raise RuntimeError(
+        "Python 3.7 or newer was not found (checked /usr/bin/python3 and /opt/bin/python3)"
+    )
 
 
 def load_config():
@@ -64,11 +83,11 @@ def load_config():
 
 def load_settings():
     if not os.path.isfile(SETTINGS_PATH):
-        return {"block_mouse": False}
+        return dict(DEFAULT_SETTINGS)
     with open(SETTINGS_PATH) as settings_file:
         settings = json.load(settings_file)
     validate_settings(settings)
-    return dict({"block_mouse": False}, **settings)
+    return dict(DEFAULT_SETTINGS, **settings)
 
 
 def valid_functions():
@@ -132,6 +151,28 @@ def stop_legacy_mapper():
             continue
 
 
+def trim_log(max_bytes=MAX_LOG_BYTES):
+    try:
+        size = os.path.getsize(LOG_PATH)
+        if size <= max_bytes:
+            return
+        with open(LOG_PATH, "rb") as log_file:
+            log_file.seek(size - max_bytes)
+            tail = log_file.read()
+        newline = tail.find(b"\n")
+        if newline != -1 and newline + 1 < len(tail):
+            tail = tail[newline + 1 :]
+        with open(LOG_PATH, "wb") as log_file:
+            log_file.write(tail)
+    except (IOError, OSError):
+        pass
+
+
+def last_log_line():
+    lines = [line.strip() for line in tail_log().splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
 def start_mapper():
     ensure_state()
     if process_matches(read_pid()):
@@ -141,7 +182,7 @@ def start_mapper():
     config = load_config()
     validate_config(config, BUTTONS, valid_functions())
     settings = load_settings()
-    log_file = open(LOG_PATH, "ab", 0)
+    trim_log()
     command = [
         python_executable(), "-u", os.path.join(APP_DIR, "runtime", "managed_mapper.py"),
         "--config", CONFIG_PATH,
@@ -150,13 +191,20 @@ def start_mapper():
     ]
     if settings.get("block_mouse"):
         command.append("--block-mouse")
-    process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+    if settings.get("ir_input_enabled"):
+        command.append("--ir-input")
+    if not settings.get("ir_exclusive_mode", True):
+        command.append("--no-ir-exclusive")
+    with open(LOG_PATH, "ab", 0) as log_file:
+        process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
     with open(PID_PATH, "w") as pid_file:
         pid_file.write(str(process.pid))
-    deadline = time.time() + 5
+    deadline = time.time() + 8
     while time.time() < deadline:
         if process.poll() is not None:
-            raise RuntimeError("Magic Mapper exited during startup; check the log")
+            detail = last_log_line()
+            message = "Magic Mapper exited during startup"
+            raise RuntimeError("%s: %s" % (message, detail) if detail else "%s; check the log" % message)
         try:
             with open(STATUS_PATH) as status_file:
                 runtime_status = json.load(status_file)
@@ -167,7 +215,9 @@ def start_mapper():
         time.sleep(0.1)
     else:
         stop_mapper()
-        raise RuntimeError("Magic Mapper did not become active; check the log")
+        detail = last_log_line()
+        message = "Magic Mapper did not become active"
+        raise RuntimeError("%s: %s" % (message, detail) if detail else "%s; check the log" % message)
     return process.pid, True
 
 
@@ -180,15 +230,15 @@ if [ ! -f \"$APP_DIR/runtime/mapperctl.py\" ]; then
   rm -f \"$0\"
   exit 0
 fi
-%s \"$APP_DIR/runtime/mapperctl.py\" start >/dev/null 2>&1
-""" % (APP_DIR, STATE_DIR, python_executable())
+/bin/sh \"$APP_DIR/runtime/mapperctl.sh\" start >/dev/null 2>&1
+""" % (APP_DIR, STATE_DIR)
     with open(HOOK_PATH, "w") as hook_file:
         hook_file.write(hook)
     os.chmod(HOOK_PATH, 0o755)
 
 
 def remove_old_hooks():
-    for path in (PREVIOUS_HOOK, LEGACY_HOOK):
+    for path in PREVIOUS_HOOKS + (LEGACY_HOOK,):
         try:
             os.unlink(path)
         except OSError:
@@ -196,9 +246,13 @@ def remove_old_hooks():
 
 
 def migrate_hook():
-    if os.path.isfile(PREVIOUS_HOOK):
+    if any(os.path.isfile(path) for path in PREVIOUS_HOOKS):
         install_hook()
-        os.unlink(PREVIOUS_HOOK)
+        for path in PREVIOUS_HOOKS:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def install():
@@ -216,7 +270,7 @@ def install():
         else:
             atomic_write_json(CONFIG_PATH, {})
     if not os.path.isfile(SETTINGS_PATH):
-        atomic_write_json(SETTINGS_PATH, {"block_mouse": False})
+        atomic_write_json(SETTINGS_PATH, dict(DEFAULT_SETTINGS))
     install_hook()
     stop_legacy_mapper()
     remove_old_hooks()
@@ -227,7 +281,7 @@ def install():
 def status():
     pid = read_pid()
     running = process_matches(pid)
-    installed = os.path.isfile(HOOK_PATH) or os.path.isfile(PREVIOUS_HOOK)
+    installed = os.path.isfile(HOOK_PATH) or any(os.path.isfile(path) for path in PREVIOUS_HOOKS)
     data = {"installed": installed, "active": running, "pid": pid if running else None}
     try:
         with open(STATUS_PATH) as status_file:
@@ -278,7 +332,12 @@ def decode_settings(encoded):
 def configure_settings(encoded):
     ensure_state()
     settings = decode_settings(encoded)
-    normalized = {"block_mouse": bool(settings.get("block_mouse", False))}
+    current = load_settings()
+    normalized = {
+        "block_mouse": bool(settings.get("block_mouse", current["block_mouse"])),
+        "ir_input_enabled": bool(settings.get("ir_input_enabled", current["ir_input_enabled"])),
+        "ir_exclusive_mode": bool(settings.get("ir_exclusive_mode", current["ir_exclusive_mode"])),
+    }
     atomic_write_json(SETTINGS_PATH, normalized)
     stop_mapper()
     pid, unused_started = start_mapper()
@@ -305,9 +364,14 @@ def discovery_result(request_id):
     return {"ok": True, "pending": True, "requestId": request_id}
 
 
+def luna_send_args():
+    # webOS 10+ requires -t 1 because -n 1 is a silent no-op; older webOS expects -n 1.
+    return ["/usr/bin/luna-send", "-t", "1"] if get_webos_version() >= 10 else ["/usr/bin/luna-send", "-n", "1"]
+
+
 def luna_json(endpoint, payload):
     process = subprocess.Popen(
-        ["/usr/bin/luna-send", "-t", "1", endpoint, json.dumps(payload)],
+        luna_send_args() + [endpoint, json.dumps(payload)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -357,7 +421,7 @@ def tail_log():
 
 def remove():
     stop_mapper()
-    for path in (HOOK_PATH, PREVIOUS_HOOK, LEGACY_HOOK):
+    for path in (HOOK_PATH,) + PREVIOUS_HOOKS + (LEGACY_HOOK,):
         try:
             os.unlink(path)
         except OSError:
@@ -377,7 +441,8 @@ def remove():
 def schedule_uninstall():
     remove()
     payload = json.dumps({"id": APP_ID, "subscribe": True})
-    command = "sleep 1; /usr/bin/luna-send -t 1 luna://com.webos.appInstallService/dev/remove '%s' >/tmp/magic-mapper-uninstall.log 2>&1" % payload
+    send = " ".join(luna_send_args())
+    command = "sleep 1; %s luna://com.webos.appInstallService/dev/remove '%s' >/tmp/magic-mapper-uninstall.log 2>&1" % (send, payload)
     subprocess.Popen(["/bin/sh", "-c", command], preexec_fn=os.setsid)
 
 
