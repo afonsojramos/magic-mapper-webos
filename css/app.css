@@ -71,9 +71,11 @@ footer {
 .wordmark {
   display: flex;
   align-items: center;
-  gap: 1rem;
   font-size: 1.35rem;
   font-weight: 700;
+}
+.wordmark > * + * {
+  margin-left: 1rem;
 }
 
 .mark {
@@ -86,16 +88,18 @@ footer {
   font-weight: 900;
 }
 
-.topbar-actions {
-  gap: 2rem;
+.topbar-actions > * + * {
+  margin-left: 2rem;
 }
 
 .status-line {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
   color: var(--muted);
   font-size: 1.05rem;
+}
+.status-line > * + * {
+  margin-left: 0.75rem;
 }
 
 .status-dot {
@@ -178,9 +182,11 @@ h1 {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 0.75rem;
   border-radius: 0.35rem;
   font-size: 1.15rem;
+}
+.primary > * + * {
+  margin-left: 0.75rem;
 }
 
 .plus {
@@ -220,9 +226,11 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 2rem;
   background: rgba(255, 106, 97, 0.1);
   border-left: 0.3rem solid var(--danger);
+}
+.error-banner > * + * {
+  margin-left: 2rem;
 }
 
 .error-banner strong {
@@ -311,9 +319,11 @@ h1 {
   min-height: 9rem;
   padding: 1.8rem;
   align-items: center;
-  gap: 1.4rem;
   color: var(--muted);
   background: var(--surface);
+}
+.empty-state > * + * {
+  margin-left: 1.4rem;
 }
 
 .empty-state:not([hidden]) {
@@ -334,9 +344,11 @@ h1 {
 footer {
   min-height: 2rem;
   justify-content: flex-start;
-  gap: 2.2rem;
   color: var(--dim);
   font-size: 0.88rem;
+}
+footer > * + * {
+  margin-left: 2.2rem;
 }
 
 .modal {
@@ -452,8 +464,8 @@ footer {
   text-align: left;
 }
 
-.choice {
-  gap: 1.5rem;
+.choice > * + * {
+  margin-left: 1.5rem;
 }
 .choice-copy {
   min-width: 0;
@@ -474,11 +486,13 @@ footer {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.85rem;
   color: var(--dim);
   font-size: 0.9rem;
   font-weight: 700;
   text-transform: uppercase;
+}
+.choice-meta .chevron {
+  margin-left: 0.85rem;
 }
 .choice:focus .choice-copy strong {
   color: #0b0e0d;
@@ -657,11 +671,13 @@ textarea.text-control {
 .mapping-breakdown li {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
   padding: 0.65rem 0.25rem;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
   font-size: 0.98rem;
+}
+.mapping-breakdown li > * + * {
+  margin-left: 1rem;
 }
 
 .mapping-breakdown strong {
@@ -671,8 +687,10 @@ textarea.text-control {
 
 .modal-actions {
   display: flex;
-  gap: 1rem;
   margin-top: 2rem;
+}
+.modal-actions > * + * {
+  margin-left: 1rem;
 }
 .secondary {
   color: var(--ink);
@@ -739,42 +757,5 @@ textarea.text-control {
   *::after {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
-  }
-}
-
-/* Fallback flex spacing for webOS 5/6 (Chromium 68/79) where flex gap is unsupported. */
-@supports not (gap: 1rem) {
-  .wordmark > * + * {
-    margin-left: 1rem;
-  }
-  .topbar-actions > * + * {
-    margin-left: 2rem;
-  }
-  .status-line > * + * {
-    margin-left: 0.75rem;
-  }
-  .primary > * + * {
-    margin-left: 0.75rem;
-  }
-  .error-banner > * + * {
-    margin-left: 2rem;
-  }
-  .empty-state > * + * {
-    margin-left: 1.4rem;
-  }
-  footer > * + * {
-    margin-left: 2.2rem;
-  }
-  .choice > * + * {
-    margin-left: 1.5rem;
-  }
-  .choice-meta > * + * {
-    margin-left: 0.85rem;
-  }
-  .mapping-breakdown li > * + * {
-    margin-left: 1rem;
-  }
-  .modal-actions > * + * {
-    margin-left: 1rem;
   }
 }

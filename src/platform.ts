@@ -30,13 +30,33 @@ export class ControllerError extends Error {
 const APP_DIR = "/media/developer/apps/usr/palm/applications/com.github.afonsojramos.magicmapper";
 const CONTROLLER = `/bin/sh ${APP_DIR}/runtime/mapperctl.sh`;
 
+function firstErrorText(response: Record<string, unknown>): string {
+  for (const candidate of [
+    response.stderrString,
+    response.stderr,
+    response.errorText,
+    response.error,
+  ]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return "Magic Mapper did not return a response";
+}
+
 function parseControllerOutput<T>(response: Record<string, unknown>): T {
   const stdout = response.stdoutString ?? response.stdout ?? response.output ?? "";
   if (typeof stdout === "string") {
     const lines = stdout.trim().split("\n");
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       try {
-        return JSON.parse(lines[index]) as T;
+        const parsed: unknown = JSON.parse(lines[index]);
+        if (
+          parsed !== null &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed) &&
+          typeof (parsed as Record<string, unknown>).ok === "boolean"
+        ) {
+          return parsed as T;
+        }
       } catch {
         // The Homebrew service may prefix controller output; read the last JSON line.
       }
@@ -44,13 +64,7 @@ function parseControllerOutput<T>(response: Record<string, unknown>): T {
   } else if (response.returnValue !== false) {
     return response as T;
   }
-  const fallback =
-    response.stderrString ??
-    response.stderr ??
-    response.errorText ??
-    (typeof response.error === "string" ? response.error : undefined);
-  const trimmed = typeof fallback === "string" ? fallback.trim() : "";
-  throw new ControllerError(trimmed || "Magic Mapper did not return a response");
+  throw new ControllerError(firstErrorText(response));
 }
 
 function lunaCall(

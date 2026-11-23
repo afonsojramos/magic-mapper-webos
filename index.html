@@ -25,9 +25,10 @@
         }
         if (typeof Object.fromEntries !== "function") {
           Object.fromEntries = function (entries) {
+            var list = Array.from(entries);
             var result = {};
-            for (var i = 0; i < entries.length; i += 1) {
-              var pair = entries[i];
+            for (var i = 0; i < list.length; i += 1) {
+              var pair = list[i];
               result[pair[0]] = pair[1];
             }
             return result;

@@ -162,6 +162,21 @@ with sync_playwright() as playwright:
     missing_py_page.locator("#retry-button").click()
     missing_py_page.wait_for_selector(".mapping-row", timeout=3000)
     assert missing_py_page.get_by_text("Running", exact=True).is_visible()
+
+    fallback_error_page = browser.new_page(viewport={"width": 1920, "height": 1080})
+    fallback_error_page.add_init_script("""
+      window.PalmServiceBridge = function () {
+        this.call = () => setTimeout(() => this.onservicecallback(JSON.stringify({
+          returnValue: false,
+          error: "Homebrew service denied root exec",
+          stdoutString: "0\\n",
+          stderrString: ""
+        })), 0);
+      };
+    """)
+    fallback_error_page.goto("http://127.0.0.1:8765/index.html")
+    fallback_error_page.wait_for_load_state("networkidle")
+    assert fallback_error_page.get_by_text("Homebrew service denied root exec", exact=True).is_visible()
     browser.close()
 
 print(SCREENSHOT)
