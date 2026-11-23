@@ -110,6 +110,11 @@ footer {
   box-shadow: 0 0 1rem rgba(220, 255, 63, 0.35);
 }
 
+.status-dot.error {
+  background: var(--danger);
+  box-shadow: 0 0 1rem rgba(255, 106, 97, 0.35);
+}
+
 .icon-button {
   width: 3.5rem;
   height: 3.5rem;
@@ -118,6 +123,10 @@ footer {
   color: var(--ink);
   background: var(--surface);
   font-size: 1.55rem;
+}
+
+.icon-button:disabled {
+  opacity: 0.42;
 }
 
 main {
@@ -205,6 +214,54 @@ h1 {
   min-height: 3.5rem;
 }
 
+.error-banner {
+  margin-top: 1.4rem;
+  padding: 1.6rem 1.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  background: rgba(255, 106, 97, 0.1);
+  border-left: 0.3rem solid var(--danger);
+}
+
+.error-banner strong {
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 1.25rem;
+}
+
+.error-banner p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.48;
+  text-wrap: pretty;
+}
+
+.error-banner p + p {
+  margin-top: 0.55rem;
+}
+
+.error-banner .primary {
+  flex: 0 0 auto;
+}
+
+.fatal-fallback {
+  padding: 5rem 6rem;
+}
+
+.fatal-fallback h1 {
+  margin-bottom: 1rem;
+  font-size: 2.6rem;
+}
+
+.fatal-fallback p {
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1.5;
+}
+
 .mappings-section {
   padding-top: 1.3rem;
 }
@@ -212,6 +269,7 @@ h1 {
 .mappings {
   max-height: 35rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: none;
 }
 
@@ -298,7 +356,10 @@ footer {
 
 .modal {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 10;
 }
 
@@ -307,7 +368,10 @@ footer {
 }
 .modal-scrim {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(0, 0, 0, 0.7);
 }
 
@@ -317,10 +381,11 @@ footer {
   right: 0;
   bottom: auto;
   left: auto;
-  width: min(43rem, 55vw);
+  width: 55vw;
+  max-width: 43rem;
   height: 100%;
   overflow: hidden;
-  max-width: none;
+  overscroll-behavior: contain;
   margin: 0;
   border: 0;
   padding: 5rem 4.5rem;
@@ -329,7 +394,8 @@ footer {
 }
 
 .modal-card.narrow {
-  width: min(38rem, 50vw);
+  width: 50vw;
+  max-width: 38rem;
 }
 .modal-card h2 {
   margin-bottom: 0.8rem;
@@ -376,6 +442,7 @@ footer {
   border-top: 1px solid var(--line);
   max-height: 35rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: none;
 }
 
@@ -459,6 +526,7 @@ footer {
   max-height: 28rem;
   margin-top: 1.5rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border-top: 1px solid var(--line);
   scrollbar-width: none;
 }
@@ -572,6 +640,7 @@ textarea.text-control {
 .app-list {
   max-height: 36rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   margin-top: 1.2rem;
   border-top: 1px solid var(--line);
   scrollbar-width: none;
@@ -582,6 +651,28 @@ textarea.text-control {
 }
 .app-option small {
   color: var(--dim);
+}
+
+.mapping-breakdown {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.mapping-breakdown li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.25rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.mapping-breakdown strong {
+  color: var(--ink);
+  font-weight: 650;
 }
 
 .modal-actions {
@@ -599,12 +690,21 @@ textarea.text-control {
 }
 .log {
   max-height: 29rem;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 1rem;
   background: #080a09;
   color: #bdc6c0;
   font: 0.8rem/1.45 monospace;
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log:focus {
+  color: #e4ebe7;
+  background: #0e1311;
+  outline: 0.2rem solid var(--acid);
+  outline-offset: 0.15rem;
 }
 
 .toast {
@@ -619,7 +719,7 @@ textarea.text-control {
   font-weight: 750;
 }
 
-.focusable:focus:not(.mapping-row) {
+.focusable:focus:not(.mapping-row):not(.log) {
   color: #0b0e0d;
   background: var(--surface-focus);
   outline: 0.2rem solid var(--acid);

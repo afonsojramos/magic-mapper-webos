@@ -54,6 +54,7 @@ export interface ActionCatalog {
 }
 
 export interface MappingAction {
+  appId?: string;
   function: string;
   inputs: InputValues;
 }
@@ -63,6 +64,8 @@ export type MapperConfig = Record<string, Mapping>;
 
 export interface MapperSettings {
   block_mouse?: boolean;
+  ir_exclusive_mode?: boolean;
+  ir_input_enabled?: boolean;
 }
 
 export interface MapperStatus {
@@ -70,6 +73,7 @@ export interface MapperStatus {
   config: MapperConfig;
   configDigest?: string;
   installed: boolean;
+  irInputDevice?: string | null;
   settings: MapperSettings;
 }
 

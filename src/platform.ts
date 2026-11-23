@@ -15,8 +15,18 @@ declare global {
   }
 }
 
+export class ControllerError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "ControllerError";
+    this.code = code;
+  }
+}
+
 const APP_DIR = "/media/developer/apps/usr/palm/applications/com.github.afonsojramos.magicmapper";
-const CONTROLLER = `/usr/bin/python3 ${APP_DIR}/runtime/mapperctl.py`;
+const CONTROLLER = `/bin/sh ${APP_DIR}/runtime/mapperctl.sh`;
 
 function parseControllerOutput<T>(response: Record<string, unknown>): T {
   const stdout = response.stdoutString ?? response.stdout ?? response.output ?? "";
@@ -30,7 +40,8 @@ function parseControllerOutput<T>(response: Record<string, unknown>): T {
     }
   }
   const stderr = response.stderrString ?? response.stderr;
-  throw new Error(typeof stderr === "string" ? stderr : "Magic Mapper did not return a response");
+  const trimmedStderr = typeof stderr === "string" ? stderr.trim() : "";
+  throw new ControllerError(trimmedStderr || "Magic Mapper did not return a response");
 }
 
 function lunaCall(
@@ -79,10 +90,12 @@ function run<T extends { ok: boolean }>(command: string, value?: string): Promis
     .then((response) => {
       if (!response.ok) {
         const message =
-          "error" in response && typeof response.error === "string"
+          "error" in response && typeof response.error === "string" && response.error.trim()
             ? response.error
             : "Magic Mapper command failed";
-        throw new Error(message);
+        const code =
+          "code" in response && typeof response.code === "string" ? response.code : undefined;
+        throw new ControllerError(message, code);
       }
       return response;
     });
@@ -108,7 +121,11 @@ function mockPlatform(): Platform {
       };
   let active = true;
   let installed = true;
-  let settings: MapperSettings = { block_mouse: false };
+  let settings: MapperSettings = {
+    block_mouse: false,
+    ir_exclusive_mode: true,
+    ir_input_enabled: false,
+  };
   const discoveries = ["rakuten", "disney", "netflix"];
 
   const status = (): Promise<StatusResponse> =>
@@ -161,7 +178,7 @@ function mockPlatform(): Platform {
       }),
     capabilities: () => Promise.resolve({ capabilities: { piccap: true } }),
     configureSettings: (nextSettings) => {
-      settings = nextSettings;
+      settings = { ...settings, ...nextSettings };
       return status();
     },
     logs: () =>
