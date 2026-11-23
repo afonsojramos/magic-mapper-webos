@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/afonsojramos/magic-mapper-webos/compare/v1.1.3...v1.2.0) (2026-11-23)
+
+
+### Features
+
+* support Entware Python 3, older webOS, IR input, and Bluetooth toggle ([#9](https://github.com/afonsojramos/magic-mapper-webos/issues/9)) ([7ea7f15](https://github.com/afonsojramos/magic-mapper-webos/commit/7ea7f15375b9e79fe58cc84bb5cd0f6f29bc75ce))
+
 ## [1.1.3](https://github.com/afonsojramos/magic-mapper-webos/compare/v1.1.2...v1.1.3) (2026-11-16)
 
 
